@@ -6,8 +6,8 @@
 
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use statistics::diagnostics::{compute_leverage, cooks_distance, variance_inflation_factor};
-use statistics::solvers::{
+use regress_rs::diagnostics::{compute_leverage, cooks_distance, variance_inflation_factor};
+use regress_rs::solvers::{
     ElasticNetRegressor, FittedRegressor, OlsRegressor, Regressor, RidgeRegressor, WlsRegressor,
 };
 
@@ -987,7 +987,7 @@ fn test_full_workflow_matches_r() {
 
 #[test]
 fn test_ridge_lambda_scaling_glmnet() {
-    use statistics::LambdaScaling;
+    use regress_rs::LambdaScaling;
 
     // Test that LambdaScaling::Glmnet multiplies lambda by n
     let (x, y) = dataset2();
@@ -1029,7 +1029,7 @@ fn test_ridge_lambda_scaling_glmnet() {
 
 #[test]
 fn test_elastic_net_lambda_scaling_glmnet() {
-    use statistics::LambdaScaling;
+    use regress_rs::LambdaScaling;
 
     // Similar test for Elastic Net
     let (x, y) = dataset2();

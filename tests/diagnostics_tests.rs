@@ -4,11 +4,11 @@ mod common;
 
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use statistics::diagnostics::{
+use regress_rs::diagnostics::{
     compute_leverage, cooks_distance, high_leverage_points, high_vif_predictors, influential_cooks,
     standardized_residuals, studentized_residuals, variance_inflation_factor,
 };
-use statistics::solvers::{FittedRegressor, OlsRegressor, Regressor};
+use regress_rs::solvers::{FittedRegressor, OlsRegressor, Regressor};
 
 // ============================================================================
 // Leverage Tests

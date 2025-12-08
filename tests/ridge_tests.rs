@@ -4,7 +4,7 @@ mod common;
 
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use statistics::solvers::{FittedRegressor, Regressor, RidgeRegressor};
+use regress_rs::solvers::{FittedRegressor, Regressor, RidgeRegressor};
 
 // ============================================================================
 // Basic Ridge Regression Tests
@@ -40,7 +40,7 @@ fn test_lambda_zero_equals_ols() {
         .lambda(0.0)
         .build();
 
-    let ols = statistics::solvers::OlsRegressor::builder()
+    let ols = regress_rs::solvers::OlsRegressor::builder()
         .with_intercept(true)
         .build();
 
@@ -209,7 +209,7 @@ fn test_ridge_handles_collinearity() {
     let (x, y) = common::generate_collinear_data(20);
 
     // OLS will have aliased coefficients
-    let ols = statistics::solvers::OlsRegressor::builder()
+    let ols = regress_rs::solvers::OlsRegressor::builder()
         .with_intercept(true)
         .build();
     let ols_fit = ols.fit(&x, &y).expect("ols fit should succeed");

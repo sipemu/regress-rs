@@ -4,7 +4,7 @@ mod common;
 
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use statistics::solvers::{FittedRegressor, OlsRegressor, Regressor};
+use regress_rs::solvers::{FittedRegressor, OlsRegressor, Regressor};
 
 // ============================================================================
 // Basic Regression Tests
