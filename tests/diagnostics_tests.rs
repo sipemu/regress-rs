@@ -286,7 +286,10 @@ fn test_vif_single_predictor() {
     let x = Mat::from_fn(50, 1, |i, _| i as f64);
     let vif = variance_inflation_factor(&x);
     assert_eq!(vif.nrows(), 1);
-    assert!((vif[0] - 1.0).abs() < 1e-10, "Single predictor VIF should be 1.0");
+    assert!(
+        (vif[0] - 1.0).abs() < 1e-10,
+        "Single predictor VIF should be 1.0"
+    );
 }
 
 #[test]
@@ -295,21 +298,22 @@ fn test_vif_too_few_observations() {
     let x = Mat::from_fn(2, 3, |i, j| (i + j) as f64);
     let vif = variance_inflation_factor(&x);
     for j in 0..vif.nrows() {
-        assert!((vif[j] - 1.0).abs() < 1e-10, "VIF should be 1.0 with few observations");
+        assert!(
+            (vif[j] - 1.0).abs() < 1e-10,
+            "VIF should be 1.0 with few observations"
+        );
     }
 }
 
 #[test]
 fn test_generalized_vif_basic() {
     // Test GVIF with simple group sizes
-    let x = Mat::from_fn(100, 4, |i, j| {
-        match j {
-            0 => i as f64,
-            1 => (i as f64 * 0.1).sin(),
-            2 => (i as f64 * 0.2).cos(),
-            3 => (i as f64 * 0.3).tan().min(10.0).max(-10.0),
-            _ => 0.0,
-        }
+    let x = Mat::from_fn(100, 4, |i, j| match j {
+        0 => i as f64,
+        1 => (i as f64 * 0.1).sin(),
+        2 => (i as f64 * 0.2).cos(),
+        3 => (i as f64 * 0.3).tan().min(10.0).max(-10.0),
+        _ => 0.0,
     });
 
     // Group sizes: [1, 1, 2] (first two are single, last two are a group)
@@ -325,7 +329,7 @@ fn test_generalized_vif_mismatched_sizes() {
     let x = Mat::from_fn(50, 3, |i, j| (i + j) as f64);
     // Group sizes don't sum to p=3
     let gvif = generalized_vif(&x, &[1, 1]); // sum is 2, not 3
-    // Should return default values
+                                             // Should return default values
     assert_eq!(gvif.len(), 2);
 }
 
@@ -335,7 +339,10 @@ fn test_generalized_vif_empty_group() {
     // Include an empty group
     let gvif = generalized_vif(&x, &[1, 0, 2]);
     assert_eq!(gvif.len(), 3);
-    assert!((gvif[1] - 1.0).abs() < 1e-10, "Empty group should have GVIF = 1.0");
+    assert!(
+        (gvif[1] - 1.0).abs() < 1e-10,
+        "Empty group should have GVIF = 1.0"
+    );
 }
 
 #[test]
@@ -345,7 +352,7 @@ fn test_high_vif_various_thresholds() {
         match j {
             0 => i as f64,
             1 => i as f64 * 1.001 + 0.5, // Highly collinear with x0
-            2 => (i as f64 * 0.1).sin(),  // Independent
+            2 => (i as f64 * 0.1).sin(), // Independent
             _ => 0.0,
         }
     });
@@ -389,7 +396,10 @@ fn test_externally_studentized_residuals() {
 
     // Most should be finite (unless leverage is very high)
     let finite_count = ext_stud.iter().filter(|&&r| r.is_finite()).count();
-    assert!(finite_count > 40, "Most externally studentized residuals should be finite");
+    assert!(
+        finite_count > 40,
+        "Most externally studentized residuals should be finite"
+    );
 }
 
 #[test]
@@ -418,7 +428,10 @@ fn test_studentized_residuals_zero_mse() {
 
     // All should be NaN when MSE is 0
     for i in 0..10 {
-        assert!(stud_resid[i].is_nan(), "Studentized residual should be NaN when MSE=0");
+        assert!(
+            stud_resid[i].is_nan(),
+            "Studentized residual should be NaN when MSE=0"
+        );
     }
 }
 
@@ -427,9 +440,9 @@ fn test_residual_outliers_various_thresholds() {
     // Create studentized residuals with known outliers
     let studentized = Col::from_fn(20, |i| {
         match i {
-            5 => 3.5,   // Outlier at threshold 3
-            10 => 2.5,  // Outlier at threshold 2
-            15 => 4.0,  // Outlier at both thresholds
+            5 => 3.5,  // Outlier at threshold 3
+            10 => 2.5, // Outlier at threshold 2
+            15 => 4.0, // Outlier at both thresholds
             _ => (i as f64 - 10.0) * 0.1,
         }
     });
@@ -468,7 +481,9 @@ fn test_externally_studentized_insufficient_df() {
 #[test]
 fn test_dffits_basic() {
     let x = Mat::from_fn(30, 1, |i, _| i as f64);
-    let y = Col::from_fn(30, |i| 1.0 + 2.0 * i as f64 + if i == 25 { 50.0 } else { 0.0 });
+    let y = Col::from_fn(30, |i| {
+        1.0 + 2.0 * i as f64 + if i == 25 { 50.0 } else { 0.0 }
+    });
 
     let model = OlsRegressor::builder().with_intercept(true).build();
     let fitted = model.fit(&x, &y).expect("fit should succeed");
@@ -486,10 +501,18 @@ fn test_dffits_basic() {
     // The outlier at i=25 should have relatively high |DFFITS|
     let max_idx = (0..30)
         .filter(|&i| dffits_vals[i].is_finite())
-        .max_by(|&a, &b| dffits_vals[a].abs().partial_cmp(&dffits_vals[b].abs()).unwrap());
+        .max_by(|&a, &b| {
+            dffits_vals[a]
+                .abs()
+                .partial_cmp(&dffits_vals[b].abs())
+                .unwrap()
+        });
 
     if let Some(idx) = max_idx {
-        assert!(dffits_vals[idx].abs() > 0.5, "Outlier should have noticeable DFFITS");
+        assert!(
+            dffits_vals[idx].abs() > 0.5,
+            "Outlier should have noticeable DFFITS"
+        );
     }
 }
 
@@ -510,7 +533,10 @@ fn test_influential_dffits() {
     let influential = influential_dffits(&dffits_vals, n_params, None);
 
     // For a clean linear fit, should have few or no influential points
-    assert!(influential.len() < 10, "Clean fit should have few influential points");
+    assert!(
+        influential.len() < 10,
+        "Clean fit should have few influential points"
+    );
 
     // Test with explicit threshold
     let influential_strict = influential_dffits(&dffits_vals, n_params, Some(0.5));

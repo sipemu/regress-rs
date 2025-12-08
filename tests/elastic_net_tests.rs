@@ -59,12 +59,14 @@ fn test_elastic_net_pure_lasso() {
             ((i * (j + 1)) as f64 * 0.01).cos()
         }
     });
-    let y = Col::from_fn(100, |i| 1.0 + 2.0 * i as f64 * 0.1 + 0.5 * (i as f64 * 0.1).sin());
+    let y = Col::from_fn(100, |i| {
+        1.0 + 2.0 * i as f64 * 0.1 + 0.5 * (i as f64 * 0.1).sin()
+    });
 
     let model = ElasticNetRegressor::builder()
         .with_intercept(true)
         .lambda(1.0) // Moderate regularization
-        .alpha(1.0)  // Pure Lasso
+        .alpha(1.0) // Pure Lasso
         .max_iterations(1000)
         .tolerance(1e-6)
         .build();
@@ -114,7 +116,9 @@ fn test_elastic_net_varying_alpha() {
             .alpha(*alpha)
             .build();
 
-        let fitted = model.fit(&x, &y).expect(&format!("fit should succeed for alpha={}", alpha));
+        let fitted = model
+            .fit(&x, &y)
+            .expect(&format!("fit should succeed for alpha={}", alpha));
         assert!(fitted.r_squared() >= 0.0);
         assert!(fitted.r_squared() <= 1.0 || fitted.r_squared().is_nan());
     }
@@ -193,7 +197,9 @@ fn test_elastic_net_convergence_parameters() {
 #[test]
 fn test_elastic_net_with_inference() {
     let x = Mat::from_fn(100, 2, |i, j| ((i + j) as f64) * 0.1);
-    let y = Col::from_fn(100, |i| 1.0 + 2.0 * i as f64 * 0.1 + (i as f64 * 0.1).sin() * 0.1);
+    let y = Col::from_fn(100, |i| {
+        1.0 + 2.0 * i as f64 * 0.1 + (i as f64 * 0.1).sin() * 0.1
+    });
 
     let model = ElasticNetRegressor::builder()
         .with_intercept(true)
@@ -241,7 +247,9 @@ fn test_elastic_net_sparsity_increases_with_lambda() {
             _ => ((i * j) as f64 * 0.01).cos() * 0.01, // Near-zero contribution
         }
     });
-    let y = Col::from_fn(100, |i| 1.0 + 2.0 * i as f64 * 0.1 + 0.5 * (i as f64 * 0.1).sin());
+    let y = Col::from_fn(100, |i| {
+        1.0 + 2.0 * i as f64 * 0.1 + 0.5 * (i as f64 * 0.1).sin()
+    });
 
     let mut prev_nonzero = 5;
 

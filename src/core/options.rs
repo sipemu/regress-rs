@@ -358,9 +358,7 @@ mod tests {
 
     #[test]
     fn test_validation_invalid_confidence_level_zero() {
-        let result = RegressionOptions::builder()
-            .confidence_level(0.0)
-            .build();
+        let result = RegressionOptions::builder().confidence_level(0.0).build();
         assert!(matches!(
             result,
             Err(OptionsError::InvalidConfidenceLevel(_))
@@ -369,9 +367,7 @@ mod tests {
 
     #[test]
     fn test_validation_invalid_confidence_level_one() {
-        let result = RegressionOptions::builder()
-            .confidence_level(1.0)
-            .build();
+        let result = RegressionOptions::builder().confidence_level(1.0).build();
         assert!(matches!(
             result,
             Err(OptionsError::InvalidConfidenceLevel(_))
@@ -380,9 +376,7 @@ mod tests {
 
     #[test]
     fn test_validation_invalid_forgetting_factor_zero() {
-        let result = RegressionOptions::builder()
-            .forgetting_factor(0.0)
-            .build();
+        let result = RegressionOptions::builder().forgetting_factor(0.0).build();
         assert!(matches!(
             result,
             Err(OptionsError::InvalidForgettingFactor(_))
@@ -391,9 +385,7 @@ mod tests {
 
     #[test]
     fn test_validation_invalid_forgetting_factor_over_one() {
-        let result = RegressionOptions::builder()
-            .forgetting_factor(1.5)
-            .build();
+        let result = RegressionOptions::builder().forgetting_factor(1.5).build();
         assert!(matches!(
             result,
             Err(OptionsError::InvalidForgettingFactor(_))
@@ -402,21 +394,14 @@ mod tests {
 
     #[test]
     fn test_validation_invalid_tolerance() {
-        let result = RegressionOptions::builder()
-            .tolerance(0.0)
-            .build();
+        let result = RegressionOptions::builder().tolerance(0.0).build();
         assert!(matches!(result, Err(OptionsError::InvalidTolerance(_))));
     }
 
     #[test]
     fn test_validation_invalid_max_iterations() {
-        let result = RegressionOptions::builder()
-            .max_iterations(0)
-            .build();
-        assert!(matches!(
-            result,
-            Err(OptionsError::InvalidMaxIterations(_))
-        ));
+        let result = RegressionOptions::builder().max_iterations(0).build();
+        assert!(matches!(result, Err(OptionsError::InvalidMaxIterations(_))));
     }
 
     #[test]

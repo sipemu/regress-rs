@@ -341,7 +341,9 @@ fn test_wls_prediction_intervals() {
     use regress_rs::core::IntervalType;
 
     let x = Mat::from_fn(50, 2, |i, j| ((i + j) as f64) * 0.1);
-    let y = Col::from_fn(50, |i| 1.0 + 2.0 * i as f64 * 0.1 + (i as f64 * 0.1).sin() * 0.2);
+    let y = Col::from_fn(50, |i| {
+        1.0 + 2.0 * i as f64 * 0.1 + (i as f64 * 0.1).sin() * 0.2
+    });
     let weights = Col::from_fn(50, |i| 1.0 / ((i % 5 + 1) as f64));
 
     let model = WlsRegressor::builder()
@@ -363,8 +365,14 @@ fn test_wls_prediction_intervals() {
     // Lower should be less than fit, fit less than upper
     for i in 0..5 {
         if result.lower[i].is_finite() && result.upper[i].is_finite() {
-            assert!(result.lower[i] <= result.fit[i], "Lower bound should be <= fit");
-            assert!(result.fit[i] <= result.upper[i], "Fit should be <= upper bound");
+            assert!(
+                result.lower[i] <= result.fit[i],
+                "Lower bound should be <= fit"
+            );
+            assert!(
+                result.fit[i] <= result.upper[i],
+                "Fit should be <= upper bound"
+            );
         }
     }
 }
@@ -553,7 +561,10 @@ fn test_wls_intercept_inference() {
 
     // If intercept inference was computed, verify it
     if let Some(se) = result.intercept_std_error {
-        assert!(se > 0.0 || se.is_nan(), "Intercept SE should be positive or NaN");
+        assert!(
+            se > 0.0 || se.is_nan(),
+            "Intercept SE should be positive or NaN"
+        );
     }
 }
 
