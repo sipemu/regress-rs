@@ -1,10 +1,15 @@
 [package]
-name = "statistics"
+name = "regress-rs"
 version = "0.1.0"
 edition = "2021"
 description = "A robust statistics library for regression analysis"
 license = "MIT"
 authors = ["Simon M"]
+repository = "https://github.com/sipemu/statistics"
+readme = "README.md"
+keywords = ["statistics", "regression", "linear-regression", "inference"]
+categories = ["science", "algorithms"]
+documentation = "https://docs.rs/regress-rs"
 
 [dependencies]
 faer = "0.20"

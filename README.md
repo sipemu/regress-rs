@@ -1,4 +1,9 @@
-# Statistics
+# regress-rs
+
+[![CI](https://github.com/sipemu/statistics/actions/workflows/ci.yml/badge.svg)](https://github.com/sipemu/statistics/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/regress-rs.svg)](https://crates.io/crates/regress-rs)
+[![Documentation](https://docs.rs/regress-rs/badge.svg)](https://docs.rs/regress-rs)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 A robust statistics library for regression analysis in Rust.
 
@@ -38,7 +43,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-statistics = { git = "https://github.com/sipemu/statistics.git" }
+regress-rs = "0.1"
 ```
 
 ## Quick Start
