@@ -51,7 +51,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-regress-rs = "0.1"
+regress-rs = "0.2"
 ```
 
 ## Quick Start
