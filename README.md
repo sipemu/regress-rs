@@ -18,6 +18,8 @@ This library provides sklearn-style regression estimators with full statistical 
   - Ridge Regression (L2 regularization)
   - Elastic Net (L1 + L2 regularization)
   - Recursive Least Squares (RLS) with online learning
+  - Bounded Least Squares (BLS/NNLS) with box constraints
+  - Tweedie GLM (Gaussian, Poisson, Gamma, Inverse-Gaussian, Compound Poisson-Gamma)
 
 - **Statistical Inference**
   - Coefficient standard errors, t-statistics, and p-values
@@ -37,6 +39,7 @@ This library provides sklearn-style regression estimators with full statistical 
   - Automatic detection of collinear/constant columns
   - Rank-deficient matrix handling
   - Edge cases (extreme weights, near-singular matrices)
+  - R-compatible NA handling (na.omit, na.exclude, na.fail, na.pass)
 
 ## Installation
 
@@ -171,6 +174,71 @@ let y_new = 5.0;
 let prediction = fitted.update(&x_new, y_new);
 ```
 
+### Bounded Least Squares (NNLS)
+
+```rust
+use regress_rs::prelude::*;
+
+// Non-negative least squares (all coefficients >= 0)
+let model = BlsRegressor::nnls().build();
+let fitted = model.fit(&x, &y).unwrap();
+
+// Custom box constraints: lower <= coefficients <= upper
+let model = BlsRegressor::builder()
+    .lower_bounds(vec![0.0, -1.0, 0.0])
+    .upper_bounds(vec![1.0, 1.0, f64::INFINITY])
+    .build();
+let fitted = model.fit(&x, &y).unwrap();
+```
+
+### Tweedie GLM
+
+```rust
+use regress_rs::prelude::*;
+
+// Gamma regression with log link (insurance claims, positive continuous data)
+let model = TweedieRegressor::gamma()
+    .with_intercept(true)
+    .build();
+let fitted = model.fit(&x, &y).unwrap();
+
+println!("Deviance: {}", fitted.deviance);
+println!("Null deviance: {}", fitted.null_deviance);
+
+// Poisson regression (count data)
+let model = TweedieRegressor::poisson()
+    .with_intercept(true)
+    .build();
+
+// Compound Poisson-Gamma (zero-inflated continuous data)
+let model = TweedieRegressor::builder()
+    .var_power(1.5)  // Between 1 (Poisson) and 2 (Gamma)
+    .link_power(0.0) // Log link
+    .with_intercept(true)
+    .build();
+```
+
+### NA Handling
+
+```rust
+use regress_rs::{NaAction, NaHandler};
+
+// Process data with NA values (represented as f64::NAN)
+let result = NaHandler::process(&x, &y, NaAction::Omit).unwrap();
+println!("Rows removed: {}", result.na_info.n_removed);
+
+// na.exclude: Remove NA but expand output back to original length
+let result = NaHandler::process(&x, &y, NaAction::Exclude).unwrap();
+let residuals_expanded = result.na_info.expand(&fitted_residuals);
+
+// na.fail: Error if any NA present
+let result = NaHandler::process(&x, &y, NaAction::Fail);
+assert!(result.is_err());
+
+// na.pass: Keep NA values (solver must handle them)
+let result = NaHandler::process(&x, &y, NaAction::Pass).unwrap();
+```
+
 ### Model Diagnostics
 
 ```rust
@@ -234,6 +302,25 @@ let vif = variance_inflation_factor(&x);
 | `residuals` | Model residuals |
 | `fitted_values` | Predicted values on training data |
 
+### Tweedie GLM Result Fields
+
+| Field | Description |
+|-------|-------------|
+| `deviance` | Total deviance of fitted model |
+| `null_deviance` | Deviance of intercept-only model |
+| `dispersion` | Estimated dispersion parameter |
+| `iterations` | Number of IRLS iterations |
+
+### Tweedie Family (var_power)
+
+| var_power | Distribution | Use Case |
+|-----------|--------------|----------|
+| 0 | Gaussian | Standard linear regression |
+| 1 | Poisson | Count data |
+| 1-2 | Compound Poisson-Gamma | Zero-inflated continuous (insurance, rainfall) |
+| 2 | Gamma | Positive continuous |
+| 3 | Inverse-Gaussian | Positive, right-skewed |
+
 ### Interval Types
 
 - `IntervalType::Prediction` - Prediction interval for new observations (wider)
@@ -257,6 +344,9 @@ This library is validated against R's statistical functions:
 - `lm()` for OLS
 - `lm()` with weights for WLS
 - `glmnet::glmnet()` for Ridge and Elastic Net
+- `nnls::nnls()` for Non-negative Least Squares
+- `statmod::tweedie()` for Tweedie GLM
+- `na.omit()`, `na.exclude()`, `na.fail()`, `na.pass()` for NA handling
 - `predict(..., interval="prediction")` for prediction intervals
 - `cooks.distance()`, `hatvalues()`, `rstandard()` for diagnostics
 - `car::vif()` for variance inflation factors

@@ -1,5 +1,6 @@
 //! Regression options and configuration.
 
+use super::na_action::NaAction;
 use thiserror::Error;
 
 /// Solver type for linear algebra operations.
@@ -60,6 +61,13 @@ pub struct RegressionOptions {
     pub tolerance: f64,
     /// Rank tolerance for QR decomposition.
     pub rank_tolerance: f64,
+    /// How to handle NA (missing) values (default: Omit).
+    ///
+    /// - `Omit`: Remove rows with NA, output is shorter
+    /// - `Exclude`: Remove rows with NA, pad output with NA at original positions
+    /// - `Fail`: Return error if any NA present
+    /// - `Pass`: Pass through NA values (solver must handle them)
+    pub na_action: NaAction,
 }
 
 impl Default for RegressionOptions {
@@ -76,6 +84,7 @@ impl Default for RegressionOptions {
             max_iterations: 1000,
             tolerance: 1e-6,
             rank_tolerance: 1e-10,
+            na_action: NaAction::Omit,
         }
     }
 }
@@ -250,6 +259,17 @@ impl RegressionOptionsBuilder {
     /// Set the rank tolerance for QR decomposition.
     pub fn rank_tolerance(mut self, tol: f64) -> Self {
         self.options.rank_tolerance = tol;
+        self
+    }
+
+    /// Set the NA (missing value) handling action.
+    ///
+    /// - `NaAction::Omit`: Remove rows with NA, output is shorter (default)
+    /// - `NaAction::Exclude`: Remove rows with NA, pad output with NA
+    /// - `NaAction::Fail`: Return error if any NA present
+    /// - `NaAction::Pass`: Pass through NA values
+    pub fn na_action(mut self, action: NaAction) -> Self {
+        self.options.na_action = action;
         self
     }
 

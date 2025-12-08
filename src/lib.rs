@@ -34,21 +34,21 @@ pub mod utils;
 /// Prelude module for convenient imports.
 pub mod prelude {
     pub use crate::core::{
-        IntervalType, LambdaScaling, PredictionResult, RegressionOptions, RegressionOptionsBuilder,
-        RegressionResult,
+        IntervalType, LambdaScaling, NaAction, NaError, NaHandler, NaInfo, PredictionResult,
+        RegressionOptions, RegressionOptionsBuilder, RegressionResult, TweedieFamily,
     };
     pub use crate::diagnostics::{
         compute_leverage, cooks_distance, high_leverage_points, influential_cooks,
         standardized_residuals, studentized_residuals, variance_inflation_factor,
     };
     pub use crate::solvers::{
-        ElasticNetRegressor, FittedRegressor, OlsRegressor, Regressor, RidgeRegressor,
-        RlsRegressor, WlsRegressor,
+        BlsRegressor, ElasticNetRegressor, FittedRegressor, OlsRegressor, Regressor,
+        RidgeRegressor, RlsRegressor, TweedieRegressor, WlsRegressor,
     };
 }
 
 pub use crate::core::{
-    IntervalType, LambdaScaling, PredictionResult, RegressionOptions, RegressionOptionsBuilder,
-    RegressionResult,
+    IntervalType, LambdaScaling, NaAction, NaError, NaHandler, NaInfo, PredictionResult,
+    RegressionOptions, RegressionOptionsBuilder, RegressionResult, TweedieFamily,
 };
 pub use crate::solvers::{FittedRegressor, Regressor};

@@ -1,5 +1,6 @@
 //! Regression result structures.
 
+use super::na_action::NaInfo;
 use faer::Col;
 
 /// Complete result from a regression fit.
@@ -103,6 +104,13 @@ pub struct RegressionResult {
 
     /// Confidence level used for intervals.
     pub confidence_level: f64,
+
+    // ========== NA Handling Information ==========
+    /// Information about NA handling (if NA values were present).
+    ///
+    /// Used by `NaAction::Exclude` to expand residuals/fitted values
+    /// back to original length.
+    pub na_info: Option<NaInfo>,
 }
 
 impl RegressionResult {
@@ -139,6 +147,7 @@ impl RegressionResult {
             conf_interval_upper: None,
             intercept_conf_interval: None,
             confidence_level: 0.95,
+            na_info: None,
         }
     }
 
@@ -203,6 +212,67 @@ impl RegressionResult {
     /// Explained sum of squares (ESS = TSS - RSS).
     pub fn ess(&self) -> f64 {
         self.tss() - self.rss()
+    }
+
+    // ========== NA-Aware Methods ==========
+
+    /// Get residuals expanded to original length (for `NaAction::Exclude`).
+    ///
+    /// If NA values were removed with `NaAction::Exclude`, this returns
+    /// residuals padded with NaN at the positions where rows were removed.
+    /// Otherwise, returns the residuals unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // With na_action = NaAction::Exclude and rows 2,3 removed:
+    /// // residuals = [r0, r1, r4] (length 3)
+    /// // residuals_expanded() = [r0, r1, NaN, NaN, r4] (length 5)
+    /// ```
+    pub fn residuals_expanded(&self) -> Col<f64> {
+        match &self.na_info {
+            Some(info) if info.needs_expansion() => info.expand(&self.residuals),
+            _ => self.residuals.clone(),
+        }
+    }
+
+    /// Get fitted values expanded to original length (for `NaAction::Exclude`).
+    ///
+    /// If NA values were removed with `NaAction::Exclude`, this returns
+    /// fitted values padded with NaN at the positions where rows were removed.
+    /// Otherwise, returns the fitted values unchanged.
+    pub fn fitted_expanded(&self) -> Col<f64> {
+        match &self.na_info {
+            Some(info) if info.needs_expansion() => info.expand(&self.fitted_values),
+            _ => self.fitted_values.clone(),
+        }
+    }
+
+    /// Get standard errors expanded to original length (for `NaAction::Exclude`).
+    ///
+    /// Only available if inference was computed.
+    pub fn std_errors_expanded(&self) -> Option<Col<f64>> {
+        self.std_errors.as_ref().map(|se| match &self.na_info {
+            Some(info) if info.needs_expansion() => info.expand(se),
+            _ => se.clone(),
+        })
+    }
+
+    /// Check if NA values were removed during fitting.
+    pub fn had_na_removed(&self) -> bool {
+        self.na_info.as_ref().is_some_and(|info| info.has_removed())
+    }
+
+    /// Get the number of rows that were removed due to NA values.
+    pub fn n_na_removed(&self) -> usize {
+        self.na_info.as_ref().map_or(0, |info| info.n_removed)
+    }
+
+    /// Get the original number of observations before NA removal.
+    pub fn n_original_observations(&self) -> usize {
+        self.na_info
+            .as_ref()
+            .map_or(self.n_observations, |info| info.n_original)
     }
 }
 

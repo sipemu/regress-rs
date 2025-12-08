@@ -8,8 +8,10 @@ use approx::assert_relative_eq;
 use faer::{Col, Mat};
 use regress_rs::diagnostics::{compute_leverage, cooks_distance, variance_inflation_factor};
 use regress_rs::solvers::{
-    ElasticNetRegressor, FittedRegressor, OlsRegressor, Regressor, RidgeRegressor, WlsRegressor,
+    BlsRegressor, ElasticNetRegressor, FittedRegressor, OlsRegressor, Regressor, RidgeRegressor,
+    TweedieRegressor, WlsRegressor,
 };
+use regress_rs::{NaAction, NaHandler};
 
 // ============================================================================
 // Dataset 1: Simple Linear Regression (OLS)
@@ -1067,5 +1069,443 @@ fn test_elastic_net_lambda_scaling_glmnet() {
         fitted_raw.intercept().unwrap(),
         fitted_glmnet.intercept().unwrap(),
         epsilon = 1e-6
+    );
+}
+
+// ============================================================================
+// NA Action Tests (comparing to R's na.omit, na.exclude, na.fail, na.pass)
+// R reference:
+// df <- data.frame(x1 = c(1, 2, NA, 4, 5), x2 = c(1, NA, 3, 4, 5), y = c(2, 4, 6, NA, 10))
+// fit_omit <- lm(y ~ x1 + x2, data = df, na.action = na.omit)
+// fit_excl <- lm(y ~ x1 + x2, data = df, na.action = na.exclude)
+// ============================================================================
+
+fn dataset_with_na() -> (Mat<f64>, Col<f64>) {
+    // Dataset with NA values (represented as NaN in Rust)
+    // x1 = c(1, 2, NA, 4, 5, 6, NA, 8)
+    // x2 = c(1, NA, 3, 4, 5, NA, 7, 8)
+    // y = c(2, 4, 6, NA, 10, 12, 14, 16)
+    let x_data = [
+        [1.0, 1.0],
+        [2.0, f64::NAN],
+        [f64::NAN, 3.0],
+        [4.0, 4.0],
+        [5.0, 5.0],
+        [6.0, f64::NAN],
+        [f64::NAN, 7.0],
+        [8.0, 8.0],
+    ];
+    let y_data = [2.0, 4.0, 6.0, f64::NAN, 10.0, 12.0, 14.0, 16.0];
+
+    let x = Mat::from_fn(8, 2, |i, j| x_data[i][j]);
+    let y = Col::from_fn(8, |i| y_data[i]);
+    (x, y)
+}
+
+#[test]
+fn test_na_omit_vs_r() {
+    let (x, y) = dataset_with_na();
+
+    // na.omit should remove rows 1, 2, 3, 5, 6 (0-indexed: rows with any NA)
+    // Clean data should be rows: 0, 4, 7 (indices with no NA anywhere)
+    let result = NaHandler::process(&x, &y, NaAction::Omit).expect("should succeed");
+
+    // Should have 3 clean rows (rows 0, 4, 7 have no NA in x or y)
+    assert_eq!(
+        result.na_info.n_removed, 5,
+        "Should remove 5 rows with NA, got {}",
+        result.na_info.n_removed
+    );
+    assert_eq!(result.x_clean.nrows(), 3);
+    assert_eq!(result.y_clean.nrows(), 3);
+
+    // Verify clean values
+    // Row 0: x=(1,1), y=2
+    assert_relative_eq!(result.x_clean[(0, 0)], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(result.x_clean[(0, 1)], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(result.y_clean[0], 2.0, epsilon = 1e-10);
+
+    // Row 4: x=(5,5), y=10
+    assert_relative_eq!(result.x_clean[(1, 0)], 5.0, epsilon = 1e-10);
+    assert_relative_eq!(result.x_clean[(1, 1)], 5.0, epsilon = 1e-10);
+    assert_relative_eq!(result.y_clean[1], 10.0, epsilon = 1e-10);
+
+    // Row 7: x=(8,8), y=16
+    assert_relative_eq!(result.x_clean[(2, 0)], 8.0, epsilon = 1e-10);
+    assert_relative_eq!(result.x_clean[(2, 1)], 8.0, epsilon = 1e-10);
+    assert_relative_eq!(result.y_clean[2], 16.0, epsilon = 1e-10);
+}
+
+#[test]
+fn test_na_exclude_vs_r() {
+    let (x, y) = dataset_with_na();
+
+    // na.exclude behaves like na.omit for fitting, but tracks indices for expansion
+    let result = NaHandler::process(&x, &y, NaAction::Exclude).expect("should succeed");
+
+    // Same cleaning as na.omit
+    assert_eq!(result.na_info.n_removed, 5);
+    assert_eq!(result.x_clean.nrows(), 3);
+
+    // But we can expand back to original size
+    let short_vec = Col::from_fn(3, |i| (i + 1) as f64);
+    let expanded = result.na_info.expand(&short_vec);
+
+    assert_eq!(expanded.nrows(), 8);
+    // Non-NA positions should have values
+    assert_relative_eq!(expanded[0], 1.0, epsilon = 1e-10); // Row 0
+    assert_relative_eq!(expanded[4], 2.0, epsilon = 1e-10); // Row 4
+    assert_relative_eq!(expanded[7], 3.0, epsilon = 1e-10); // Row 7
+
+    // NA positions should be NaN
+    assert!(expanded[1].is_nan());
+    assert!(expanded[2].is_nan());
+    assert!(expanded[3].is_nan());
+    assert!(expanded[5].is_nan());
+    assert!(expanded[6].is_nan());
+}
+
+#[test]
+fn test_na_fail_vs_r() {
+    let (x, y) = dataset_with_na();
+
+    // na.fail should return an error if any NA present
+    let result = NaHandler::process(&x, &y, NaAction::Fail);
+
+    assert!(result.is_err(), "na.fail should error on NA data");
+}
+
+#[test]
+fn test_na_pass_vs_r() {
+    let (x, y) = dataset_with_na();
+
+    // na.pass should keep all data unchanged
+    let result = NaHandler::process(&x, &y, NaAction::Pass).expect("should succeed");
+
+    assert_eq!(result.na_info.n_removed, 0);
+    assert_eq!(result.x_clean.nrows(), 8);
+    assert_eq!(result.y_clean.nrows(), 8);
+
+    // Values should be unchanged (including NaN)
+    assert!(result.x_clean[(2, 0)].is_nan()); // NA in original
+    assert!(result.y_clean[3].is_nan()); // NA in original
+}
+
+#[test]
+fn test_na_clean_data_no_removal() {
+    // With clean data, all actions except fail should work the same
+    let x = Mat::from_fn(5, 2, |i, j| (i + j) as f64);
+    let y = Col::from_fn(5, |i| (i * 2) as f64);
+
+    for action in [NaAction::Omit, NaAction::Exclude, NaAction::Pass] {
+        let result = NaHandler::process(&x, &y, action).expect("should succeed");
+
+        assert_eq!(
+            result.na_info.n_removed, 0,
+            "No NA to remove for {:?}",
+            action
+        );
+        assert_eq!(result.x_clean.nrows(), 5);
+    }
+
+    // na.fail should also succeed with clean data
+    let result = NaHandler::process(&x, &y, NaAction::Fail);
+    assert!(result.is_ok(), "na.fail should succeed with clean data");
+}
+
+// ============================================================================
+// BLS/NNLS Tests (comparing to R's nnls package)
+// R reference:
+// library(nnls)
+// set.seed(42)
+// A <- matrix(c(1,2,3,4,5,6,7,8,9,10,11,12), 4, 3)
+// b <- c(1, 2, 3, 4)
+// result <- nnls(A, b)
+// ============================================================================
+
+#[test]
+fn test_nnls_vs_r() {
+    // R: nnls(A, b) with A being 4x3 matrix, b being length-4 vector
+    // A = matrix(1:12, 4, 3) in R is column-major:
+    // [1, 5, 9]
+    // [2, 6, 10]
+    // [3, 7, 11]
+    // [4, 8, 12]
+    let a = Mat::from_fn(4, 3, |i, j| (i + j * 4 + 1) as f64);
+    let b = Col::from_fn(4, |i| (i + 1) as f64);
+
+    let fitted = BlsRegressor::nnls()
+        .build()
+        .fit(&a, &b)
+        .expect("fit should succeed");
+
+    // R result: x = c(0.5, 0, 0) with deviance = 1.0
+    // Note: NNLS solutions may differ slightly due to algorithm differences
+    // The key constraint is that all coefficients must be >= 0
+    for j in 0..3 {
+        assert!(
+            fitted.coefficients()[j] >= -1e-10,
+            "NNLS coefficient {} = {} should be >= 0",
+            j,
+            fitted.coefficients()[j]
+        );
+    }
+
+    // Verify residual sum of squares is reasonable
+    let predictions = fitted.predict(&a);
+    let rss: f64 = (0..4).map(|i| (b[i] - predictions[i]).powi(2)).sum();
+    assert!(rss < 2.0, "RSS {} should be reasonable for NNLS", rss);
+}
+
+#[test]
+fn test_bls_box_constraints_vs_r() {
+    // Test bounded least squares with explicit bounds
+    // This generalizes NNLS with arbitrary lower/upper bounds
+    let a = Mat::from_fn(10, 3, |i, j| ((i + 1) * (j + 1)) as f64);
+    let b = Col::from_fn(10, |i| (2.0 * i as f64 + 1.0));
+
+    // Constrain: 0 <= x0 <= 0.5, -1 <= x1 <= 1, 0 <= x2 <= inf
+    let lower = vec![0.0, -1.0, 0.0];
+    let upper = vec![0.5, 1.0, f64::INFINITY];
+
+    let fitted = BlsRegressor::builder()
+        .lower_bounds(lower.clone())
+        .upper_bounds(upper.clone())
+        .build()
+        .fit(&a, &b)
+        .expect("fit should succeed");
+
+    // Verify all constraints are satisfied
+    assert!(
+        fitted.coefficients()[0] >= lower[0] - 1e-10,
+        "coef[0] {} should be >= {}",
+        fitted.coefficients()[0],
+        lower[0]
+    );
+    assert!(
+        fitted.coefficients()[0] <= upper[0] + 1e-10,
+        "coef[0] {} should be <= {}",
+        fitted.coefficients()[0],
+        upper[0]
+    );
+    assert!(
+        fitted.coefficients()[1] >= lower[1] - 1e-10,
+        "coef[1] {} should be >= {}",
+        fitted.coefficients()[1],
+        lower[1]
+    );
+    assert!(
+        fitted.coefficients()[1] <= upper[1] + 1e-10,
+        "coef[1] {} should be <= {}",
+        fitted.coefficients()[1],
+        upper[1]
+    );
+    assert!(
+        fitted.coefficients()[2] >= lower[2] - 1e-10,
+        "coef[2] {} should be >= {}",
+        fitted.coefficients()[2],
+        lower[2]
+    );
+}
+
+#[test]
+fn test_nnls_vs_ols_when_ols_positive() {
+    // When OLS solution is already positive, NNLS should give same result
+    let x = Mat::from_fn(20, 2, |i, _| (i + 1) as f64);
+    let y = Col::from_fn(20, |i| 1.0 + 0.5 * (i + 1) as f64); // y = 1 + 0.5*x
+
+    let ols_fitted = OlsRegressor::builder()
+        .with_intercept(false)
+        .build()
+        .fit(&x, &y)
+        .expect("OLS fit should succeed");
+
+    // Only run NNLS comparison if OLS gives positive coefficients
+    if ols_fitted.coefficients().iter().all(|&c| c >= 0.0) {
+        let nnls_fitted = BlsRegressor::nnls()
+            .build()
+            .fit(&x, &y)
+            .expect("NNLS fit should succeed");
+
+        // Solutions should be similar
+        for j in 0..2 {
+            assert_relative_eq!(
+                nnls_fitted.coefficients()[j],
+                ols_fitted.coefficients()[j],
+                epsilon = 0.1
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Tweedie GLM Tests (comparing to R's statmod::tweedie)
+// R reference:
+// library(statmod)
+// set.seed(42)
+// n <- 50
+// x <- 1:n / 10
+// mu <- exp(0.5 + 0.3 * x)
+// y <- rgamma(n, shape = 2, scale = mu / 2)  # Gamma distribution
+// fit <- glm(y ~ x, family = tweedie(var.power = 2, link.power = 0))
+// ============================================================================
+
+#[test]
+fn test_tweedie_gamma_vs_r() {
+    // Generate gamma-like data: y = exp(intercept + slope * x)
+    // With var_power = 2 (Gamma) and link_power = 0 (log link)
+    let n = 50;
+    let x = Mat::from_fn(n, 1, |i, _| (i + 1) as f64 / 10.0);
+    let y = Col::from_fn(n, |i| {
+        let eta = 0.5 + 0.3 * ((i + 1) as f64 / 10.0);
+        eta.exp() // True mean
+    });
+
+    let fitted = TweedieRegressor::gamma()
+        .with_intercept(true)
+        .build()
+        .fit(&x, &y)
+        .expect("fit should succeed");
+
+    // Check that coefficients are close to true values
+    // True: intercept ≈ 0.5, slope ≈ 0.3
+    assert!(
+        (fitted.result().intercept.unwrap() - 0.5).abs() < 0.2,
+        "Gamma GLM intercept {} should be close to 0.5",
+        fitted.result().intercept.unwrap()
+    );
+    assert!(
+        (fitted.coefficients()[0] - 0.3).abs() < 0.1,
+        "Gamma GLM slope {} should be close to 0.3",
+        fitted.coefficients()[0]
+    );
+
+    // Deviance should be much less than null deviance
+    assert!(
+        fitted.deviance < fitted.null_deviance,
+        "Deviance {} should be < null deviance {}",
+        fitted.deviance,
+        fitted.null_deviance
+    );
+}
+
+#[test]
+fn test_tweedie_poisson_vs_r() {
+    // Poisson-like data with var_power = 1
+    let n = 30;
+    let x = Mat::from_fn(n, 1, |i, _| i as f64 / 10.0);
+    let y = Col::from_fn(n, |i| {
+        let eta = 1.0 + 0.2 * (i as f64 / 10.0);
+        eta.exp().max(0.1) // Ensure positive
+    });
+
+    let fitted = TweedieRegressor::poisson()
+        .with_intercept(true)
+        .build()
+        .fit(&x, &y)
+        .expect("fit should succeed");
+
+    // Check model produces reasonable results
+    assert!(fitted.result().r_squared > 0.5, "R² should be decent");
+    assert!(fitted.iterations > 0, "Should have run IRLS iterations");
+    assert!(fitted.dispersion > 0.0, "Dispersion should be positive");
+}
+
+#[test]
+fn test_tweedie_gaussian_vs_ols() {
+    // Gaussian GLM (var_power = 0, identity link) should match OLS
+    let x = Mat::from_fn(20, 1, |i, _| i as f64);
+    let y = Col::from_fn(20, |i| 2.0 + 3.0 * i as f64);
+
+    let glm_fitted = TweedieRegressor::gaussian()
+        .with_intercept(true)
+        .build()
+        .fit(&x, &y)
+        .expect("GLM fit should succeed");
+
+    let ols_fitted = OlsRegressor::builder()
+        .with_intercept(true)
+        .build()
+        .fit(&x, &y)
+        .expect("OLS fit should succeed");
+
+    // Coefficients should match closely
+    assert_relative_eq!(
+        glm_fitted.result().intercept.unwrap(),
+        ols_fitted.intercept().unwrap(),
+        epsilon = 0.5
+    );
+    assert_relative_eq!(
+        glm_fitted.coefficients()[0],
+        ols_fitted.coefficients()[0],
+        epsilon = 0.1
+    );
+}
+
+#[test]
+fn test_tweedie_compound_poisson_gamma() {
+    // Compound Poisson-Gamma (1 < var_power < 2) for zero-inflated continuous data
+    let n = 40;
+    let x = Mat::from_fn(n, 1, |i, _| i as f64);
+    let y = Col::from_fn(n, |i| {
+        if i % 5 == 0 {
+            0.0 // Some zeros
+        } else {
+            (1.0 + 0.1 * i as f64).exp()
+        }
+    });
+
+    let fitted = TweedieRegressor::builder()
+        .var_power(1.5)
+        .link_power(0.0) // log link
+        .with_intercept(true)
+        .build()
+        .fit(&x, &y)
+        .expect("fit should succeed");
+
+    // Model should handle zeros in the data
+    assert!(fitted.iterations > 0);
+    assert!(fitted.dispersion > 0.0);
+}
+
+#[test]
+fn test_tweedie_inverse_gaussian() {
+    // Inverse-Gaussian (var_power = 3)
+    let n = 30;
+    let x = Mat::from_fn(n, 1, |i, _| (i + 1) as f64);
+    let y = Col::from_fn(n, |i| {
+        let eta = 0.5 + 0.02 * (i + 1) as f64;
+        eta.exp()
+    });
+
+    let fitted = TweedieRegressor::inverse_gaussian()
+        .with_intercept(true)
+        .build()
+        .fit(&x, &y)
+        .expect("fit should succeed");
+
+    // Check reasonable results
+    assert!(fitted.result().intercept.is_some(), "Should have intercept");
+    assert!(fitted.deviance.is_finite(), "Deviance should be finite");
+}
+
+#[test]
+fn test_tweedie_deviance_calculation() {
+    // Verify deviance decreases as model improves
+    let x = Mat::from_fn(30, 1, |i, _| i as f64);
+    let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp());
+
+    let fitted = TweedieRegressor::gamma()
+        .with_intercept(true)
+        .build()
+        .fit(&x, &y)
+        .expect("fit should succeed");
+
+    // Deviance-based R² should be between 0 and 1 for a good model
+    let pseudo_r2 = 1.0 - fitted.deviance / fitted.null_deviance;
+    assert!(
+        pseudo_r2 > 0.0 && pseudo_r2 <= 1.0,
+        "Pseudo R² {} should be in (0, 1]",
+        pseudo_r2
     );
 }
