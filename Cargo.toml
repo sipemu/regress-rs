@@ -1,0 +1,15 @@
+[package]
+name = "statistics"
+version = "0.1.0"
+edition = "2021"
+description = "A robust statistics library for regression analysis"
+license = "MIT"
+authors = ["Simon M"]
+
+[dependencies]
+faer = "0.20"
+statrs = "0.17"
+thiserror = "2.0"
+
+[dev-dependencies]
+approx = "0.5"
