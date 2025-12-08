@@ -24,8 +24,8 @@ use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 /// # Model
 ///
 /// The Tweedie GLM models:
-/// - E[Y] = μ = g^(-1)(Xβ) where g is the link function
-/// - Var[Y] = φ * V(μ) where V(μ) = μ^var_power
+/// - `E[Y] = μ = g^(-1)(Xβ)` where g is the link function
+/// - `Var[Y] = φ * V(μ)` where `V(μ) = μ^var_power`
 ///
 /// # Example
 ///

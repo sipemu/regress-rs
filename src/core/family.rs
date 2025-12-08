@@ -111,7 +111,7 @@ impl TweedieFamily {
 
     /// Compute the variance function V(μ) = μ^var_power.
     ///
-    /// The variance of Y given μ is Var[Y] = φ * V(μ) where φ is the dispersion.
+    /// The variance of Y given μ is `Var[Y] = φ * V(μ)` where φ is the dispersion.
     #[inline]
     pub fn variance(&self, mu: f64) -> f64 {
         if self.var_power == 0.0 {

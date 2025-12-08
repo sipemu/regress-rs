@@ -224,11 +224,9 @@ impl RegressionResult {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// // With na_action = NaAction::Exclude and rows 2,3 removed:
-    /// // residuals = [r0, r1, r4] (length 3)
-    /// // residuals_expanded() = [r0, r1, NaN, NaN, r4] (length 5)
-    /// ```
+    /// With `na_action = NaAction::Exclude` and rows 2,3 removed:
+    /// - `residuals = [r0, r1, r4]` (length 3)
+    /// - `residuals_expanded() = [r0, r1, NaN, NaN, r4]` (length 5)
     pub fn residuals_expanded(&self) -> Col<f64> {
         match &self.na_info {
             Some(info) if info.needs_expansion() => info.expand(&self.residuals),
