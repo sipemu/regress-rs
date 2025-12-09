@@ -45,10 +45,10 @@ pub mod prelude {
         variance_inflation_factor, working_residuals,
     };
     pub use crate::solvers::{
-        BinomialRegressor, BlsRegressor, ElasticNetRegressor, FittedBinomial,
-        FittedNegativeBinomial, FittedPoisson, FittedRegressor, FittedTweedie,
-        NegativeBinomialRegressor, OlsRegressor, PoissonRegressor, Regressor, RidgeRegressor,
-        RlsRegressor, TweedieRegressor, WlsRegressor,
+        AlmDistribution, AlmRegressor, BinomialRegressor, BlsRegressor, ElasticNetRegressor,
+        FittedAlm, FittedBinomial, FittedNegativeBinomial, FittedPoisson, FittedRegressor,
+        FittedTweedie, LinkFunction, NegativeBinomialRegressor, OlsRegressor, PoissonRegressor,
+        Regressor, RidgeRegressor, RlsRegressor, TweedieRegressor, WlsRegressor,
     };
 }
 

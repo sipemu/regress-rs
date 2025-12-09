@@ -23,6 +23,7 @@ This library provides sklearn-style regression estimators with full statistical 
   - Poisson GLM (Log, Identity, Sqrt links) with offset support
   - Negative Binomial GLM (overdispersed count data with theta estimation)
   - Binomial GLM (Logistic, Probit, Complementary log-log)
+  - Augmented Linear Model (ALM) with 24+ distributions (Normal, Laplace, Student-t, Gamma, Beta, etc.)
 
 - **Statistical Inference**
   - Coefficient standard errors, t-statistics, and p-values
@@ -344,6 +345,56 @@ let deviance = fitted.deviance_residuals();
 let working = fitted.working_residuals();
 ```
 
+### Augmented Linear Model (ALM)
+
+The ALM supports 24+ distributions for maximum likelihood regression, based on the [greybox R package](https://github.com/config-i1/greybox).
+
+```rust
+use regress_rs::prelude::*;
+
+// Laplace (LAD) regression - robust to outliers
+let model = AlmRegressor::builder()
+    .distribution(AlmDistribution::Laplace)
+    .with_intercept(true)
+    .build();
+let fitted = model.fit(&x, &y).unwrap();
+
+println!("Log-likelihood: {}", fitted.log_likelihood);
+println!("AIC: {}", fitted.result().aic);
+
+// Student-t regression - heavy-tailed errors
+let model = AlmRegressor::builder()
+    .distribution(AlmDistribution::StudentT)
+    .with_intercept(true)
+    .build();
+let fitted = model.fit(&x, &y).unwrap();
+
+// Log-Normal for positive skewed data
+let model = AlmRegressor::builder()
+    .distribution(AlmDistribution::LogNormal)
+    .with_intercept(true)
+    .build();
+
+// Beta regression for proportions in (0, 1)
+let model = AlmRegressor::builder()
+    .distribution(AlmDistribution::Beta)
+    .with_intercept(true)
+    .build();
+
+// Gamma for positive continuous data
+let model = AlmRegressor::builder()
+    .distribution(AlmDistribution::Gamma)
+    .with_intercept(true)
+    .build();
+
+// Custom link function
+let model = AlmRegressor::builder()
+    .distribution(AlmDistribution::Normal)
+    .link(LinkFunction::Log)
+    .with_intercept(true)
+    .build();
+```
+
 ### NA Handling
 
 ```rust
@@ -510,6 +561,38 @@ let vif = variance_inflation_factor(&x);
 | Deviance | sign(y - μ) × √d_i | Model fit assessment |
 | Working | (y - μ) × (dη/dμ) | IRLS algorithm diagnostics |
 
+### ALM (Augmented Linear Model) Result Fields
+
+| Field | Description |
+|-------|-------------|
+| `log_likelihood` | Maximized log-likelihood |
+| `scale` | Estimated scale parameter |
+| `iterations` | Number of IRLS iterations |
+
+### ALM Distributions
+
+| Category | Distributions |
+|----------|---------------|
+| **Continuous** | Normal, Laplace, Student-t, Logistic, Asymmetric Laplace, Generalised Normal, S |
+| **Log-transformed** | Log-Normal, Log-Laplace, Log-S, Log-Generalised Normal |
+| **Positive** | Gamma, Inverse Gaussian, Exponential, Folded Normal |
+| **Box-Cox** | Box-Cox Normal |
+| **Proportions** | Beta, Logit-Normal |
+| **Count data** | Poisson, Negative Binomial, Binomial, Geometric |
+| **Ordinal** | Cumulative Logistic, Cumulative Normal |
+
+### ALM Link Functions
+
+| Link | Function | Inverse | Typical Use |
+|------|----------|---------|-------------|
+| Identity | μ = η | η | Normal, Laplace, Student-t |
+| Log | μ = exp(η) | ln(μ) | Gamma, Poisson, Log-Normal |
+| Logit | μ = 1/(1+e⁻ᶯ) | ln(μ/(1-μ)) | Beta, Binomial |
+| Probit | μ = Φ(η) | Φ⁻¹(μ) | Ordinal models |
+| Inverse | μ = 1/η | 1/μ | Inverse Gaussian |
+| Sqrt | μ = η² | √μ | Count data (alternative) |
+| Cloglog | μ = 1-e⁻ᵉˣᵖ⁽ᶯ⁾ | ln(-ln(1-μ)) | Asymmetric binary |
+
 ### Prediction Types (GLM)
 
 | Type | Description |
@@ -545,7 +628,10 @@ This library is validated against R's statistical functions:
 - `glm(..., family=poisson)` for Poisson GLM (log, identity, sqrt links)
 - `MASS::glm.nb()` for Negative Binomial GLM with theta estimation
 - `glm(..., family=binomial)` for Binomial GLM (logit, probit, cloglog)
+- `glm(..., family=Gamma)` for Gamma GLM
+- `glm(..., family=inverse.gaussian)` for Inverse Gaussian GLM
 - `glm(..., offset=...)` for rate modeling with offset terms
+- `greybox::alm()` for Augmented Linear Model (Normal, Laplace, Student-t, Log-Normal, Gamma, etc.)
 - `residuals(..., type="pearson/deviance/working")` for GLM residuals
 - `predict(..., se.fit=TRUE)` for GLM predictions with standard errors
 - `na.omit()`, `na.exclude()`, `na.fail()`, `na.pass()` for NA handling
@@ -553,7 +639,7 @@ This library is validated against R's statistical functions:
 - `cooks.distance()`, `hatvalues()`, `rstandard()` for diagnostics
 - `car::vif()` for variance inflation factors
 
-All tests ensure numerical agreement with R within appropriate tolerances.
+All tests ensure numerical agreement with R within appropriate tolerances (474 tests total).
 
 ## Dependencies
 
