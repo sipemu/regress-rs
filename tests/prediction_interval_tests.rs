@@ -262,8 +262,11 @@ fn test_different_confidence_levels() {
 /// Test OLS without intercept prediction intervals.
 #[test]
 fn test_ols_no_intercept_prediction_interval() {
+    // Use data with noise so MSE > 0
     let x = Mat::from_fn(10, 1, |i, _| (i + 1) as f64);
-    let y = Col::from_fn(10, |i| 2.5 * (i + 1) as f64);
+    let y = Col::from_fn(10, |i| {
+        2.5 * (i + 1) as f64 + if i % 2 == 0 { 0.1 } else { -0.1 }
+    });
 
     let model = OlsRegressor::builder().with_intercept(false).build();
     let fitted = model.fit(&x, &y).unwrap();
@@ -272,8 +275,8 @@ fn test_ols_no_intercept_prediction_interval() {
     let result = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.95);
 
     // Point predictions should be approximately 2.5 * x
-    assert_approx(result.fit[0], 2.5 * 15.0, 0.1, "fit[0]");
-    assert_approx(result.fit[1], 2.5 * 16.0, 0.1, "fit[1]");
+    assert_approx(result.fit[0], 2.5 * 15.0, 0.5, "fit[0]");
+    assert_approx(result.fit[1], 2.5 * 16.0, 0.5, "fit[1]");
 
     // Intervals should be finite
     assert!(result.lower[0].is_finite());

@@ -11,7 +11,7 @@ use crate::solvers::ols::OlsRegressor;
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
 use crate::utils::detect_constant_columns;
 use faer::linalg::solvers::Qr;
-use faer::{Col, Index, Mat};
+use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, StudentsT};
 
 /// Weighted Least Squares regression estimator.
@@ -290,8 +290,8 @@ impl WlsRegressor {
 
         // Invert using QR
         let qr: Qr<f64> = xtwx.qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
+        let q = qr.compute_Q();
+        let r = qr.R();
 
         // Check if R is singular
         for i in 0..n_features {
@@ -378,15 +378,13 @@ impl WlsRegressor {
         let mut aliased = constant_cols.to_vec();
 
         let qr = x.col_piv_qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
-        let perm = qr.col_permutation();
+        let q = qr.compute_Q();
+        let r = qr.R();
+        let perm = qr.P();
 
         let perm_arr = perm.arrays().0;
         let mut perm_inv: Vec<usize> = vec![0; n_features];
-        for j in 0..n_features {
-            perm_inv[j] = perm_arr[j].to_signed().unsigned_abs();
-        }
+        perm_inv[..n_features].copy_from_slice(&perm_arr[..n_features]);
 
         // Determine rank
         let mut rank = 0;
@@ -661,8 +659,8 @@ impl WlsRegressor {
 
             // Invert X'WX using QR
             let qr: Qr<f64> = xtwx.qr();
-            let q = qr.compute_q();
-            let r = qr.compute_r();
+            let q = qr.compute_Q();
+            let r = qr.R();
 
             let mut xtwx_inv: Mat<f64> = Mat::zeros(n_features, n_features);
             let qt = q.transpose();

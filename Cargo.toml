@@ -12,12 +12,12 @@ categories = ["science", "algorithms"]
 documentation = "https://docs.rs/regress-rs"
 
 [dependencies]
-faer = "0.20"
-statrs = "0.17"
+faer = "0.23"
+statrs = "0.18"
 thiserror = "2.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 approx = "0.5"

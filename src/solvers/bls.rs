@@ -12,7 +12,7 @@ use crate::core::{
     IntervalType, PredictionResult, RegressionOptions, RegressionOptionsBuilder, RegressionResult,
 };
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
-use faer::{Col, Index, Mat};
+use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 
 /// Bounded Least Squares regression estimator.
@@ -271,9 +271,9 @@ impl BlsRegressor {
 
         // Solve X_P * beta_P = y using QR decomposition
         let qr = x_passive.col_piv_qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
-        let perm = qr.col_permutation();
+        let q = qr.compute_Q();
+        let r = qr.R();
+        let perm = qr.P();
 
         // Compute Q'y
         let qty = q.transpose() * y;
@@ -295,7 +295,7 @@ impl BlsRegressor {
         // Unpermute
         let mut beta = Col::zeros(n_passive);
         for i in 0..n_passive {
-            beta[perm.inverse().arrays().0[i].to_signed().unsigned_abs()] = beta_perm[i];
+            beta[perm.inverse().arrays().0[i]] = beta_perm[i];
         }
 
         Ok(beta)

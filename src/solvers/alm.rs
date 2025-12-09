@@ -51,7 +51,7 @@ use crate::core::{
 };
 use crate::inference::CoefficientInference;
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
-use faer::{Col, Index, Mat};
+use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 use statrs::function::gamma::ln_gamma;
 use std::f64::consts::PI;
@@ -927,11 +927,11 @@ impl AlmRegressor {
 
             // Solve using QR with column pivoting and proper permutation handling
             let qr = x_aug.col_piv_qr();
-            let perm = qr.col_permutation();
+            let perm = qr.P();
             let perm_arr = perm.arrays().0;
 
-            let q = qr.compute_q();
-            let r = qr.compute_r();
+            let q = qr.compute_Q();
+            let r = qr.R();
             let ncols = p + 1;
 
             let qty = q.transpose() * &y_init;
@@ -951,18 +951,18 @@ impl AlmRegressor {
             // Apply inverse permutation: beta[perm[i]] = beta_perm[i]
             let mut beta = Col::zeros(ncols);
             for i in 0..ncols {
-                let orig_col = perm_arr[i].to_signed().unsigned_abs();
+                let orig_col = perm_arr[i];
                 beta[orig_col] = beta_perm[i];
             }
 
             Ok(beta)
         } else {
             let qr = x.col_piv_qr();
-            let perm = qr.col_permutation();
+            let perm = qr.P();
             let perm_arr = perm.arrays().0;
 
-            let q = qr.compute_q();
-            let r = qr.compute_r();
+            let q = qr.compute_Q();
+            let r = qr.R();
 
             let qty = q.transpose() * &y_init;
             let mut beta_perm = Col::zeros(p);
@@ -980,7 +980,7 @@ impl AlmRegressor {
             // Apply inverse permutation
             let mut beta = Col::zeros(p);
             for i in 0..p {
-                let orig_col = perm_arr[i].to_signed().unsigned_abs();
+                let orig_col = perm_arr[i];
                 beta[orig_col] = beta_perm[i];
             }
 
@@ -1164,11 +1164,11 @@ impl AlmRegressor {
 
             // Solve weighted least squares with permutation handling
             let qr = xw.col_piv_qr();
-            let perm = qr.col_permutation();
+            let perm = qr.P();
             let perm_arr = perm.arrays().0;
 
-            let q = qr.compute_q();
-            let r = qr.compute_r();
+            let q = qr.compute_Q();
+            let r = qr.R();
 
             let qty = q.transpose() * &zw;
             let mut beta_perm = Col::zeros(ncols);
@@ -1186,7 +1186,7 @@ impl AlmRegressor {
             // Apply inverse permutation
             let mut beta = Col::zeros(ncols);
             for i in 0..ncols {
-                let orig_col = perm_arr[i].to_signed().unsigned_abs();
+                let orig_col = perm_arr[i];
                 beta[orig_col] = beta_perm[i];
             }
 
@@ -1204,11 +1204,11 @@ impl AlmRegressor {
             }
 
             let qr = xw.col_piv_qr();
-            let perm = qr.col_permutation();
+            let perm = qr.P();
             let perm_arr = perm.arrays().0;
 
-            let q = qr.compute_q();
-            let r = qr.compute_r();
+            let q = qr.compute_Q();
+            let r = qr.R();
 
             let qty = q.transpose() * &zw;
             let mut beta_perm = Col::zeros(p);
@@ -1226,7 +1226,7 @@ impl AlmRegressor {
             // Apply inverse permutation
             let mut beta = Col::zeros(p);
             for i in 0..p {
-                let orig_col = perm_arr[i].to_signed().unsigned_abs();
+                let orig_col = perm_arr[i];
                 beta[orig_col] = beta_perm[i];
             }
 

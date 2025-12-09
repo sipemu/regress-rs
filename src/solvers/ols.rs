@@ -9,7 +9,7 @@ use crate::inference::{
 };
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
 use crate::utils::{center_columns, center_vector, detect_constant_columns};
-use faer::{Col, Index, Mat};
+use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 
 /// Ordinary Least Squares regression estimator.
@@ -58,7 +58,7 @@ impl OlsRegressor {
     /// Check if a matrix has full column rank.
     pub fn is_full_rank(x: &Mat<f64>) -> bool {
         let qr = x.col_piv_qr();
-        let r = qr.compute_r();
+        let r = qr.R();
         let n_cols = x.ncols();
 
         // Check diagonal elements of R
@@ -233,17 +233,15 @@ impl OlsRegressor {
 
         // Perform column-pivoted QR decomposition
         let qr = x.col_piv_qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
-        let perm = qr.col_permutation();
+        let q = qr.compute_Q();
+        let r = qr.R();
+        let perm = qr.P();
 
         // Build permutation mapping: perm_fwd[i] = which original column is at position i
         // perm_inv[j] = where original column j ended up
         let perm_arr = perm.arrays().0;
         let mut perm_inv: Vec<usize> = vec![0; n_features];
-        for j in 0..n_features {
-            perm_inv[j] = perm_arr[j].to_signed().unsigned_abs();
-        }
+        perm_inv[..n_features].copy_from_slice(&perm_arr[..n_features]);
 
         // Determine numerical rank from R diagonal
         let mut rank = 0;

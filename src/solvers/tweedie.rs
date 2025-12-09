@@ -268,9 +268,9 @@ impl TweedieRegressor {
 
         // Solve via QR decomposition
         let qr = x_weighted.col_piv_qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
-        let perm = qr.col_permutation();
+        let q = qr.compute_Q();
+        let r = qr.R();
+        let perm = qr.P();
 
         // Compute Q'z
         let qtz = q.transpose() * z_weighted;
@@ -292,8 +292,7 @@ impl TweedieRegressor {
         // Unpermute
         let mut beta = Col::zeros(n_params);
         for i in 0..n_params {
-            use faer::Index;
-            beta[perm.inverse().arrays().0[i].to_signed().unsigned_abs()] = beta_perm[i];
+            beta[perm.inverse().arrays().0[i]] = beta_perm[i];
         }
 
         Ok(beta)
@@ -479,8 +478,8 @@ impl TweedieRegressor {
 
         // Invert via QR
         let qr = xtwx.qr();
-        let q = qr.compute_q();
-        let r: Mat<f64> = qr.compute_r();
+        let q = qr.compute_Q();
+        let r = qr.R().to_owned();
 
         // Compute inverse column by column
         let mut xtwx_inv: Mat<f64> = Mat::zeros(n_params, n_params);

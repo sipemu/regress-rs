@@ -37,7 +37,7 @@ pub fn compute_prediction_intervals(
     let mut upper = Col::zeros(n_new);
 
     // Handle edge cases
-    if df <= 0.0 || mse <= 0.0 {
+    if df <= 0.0 || mse < 0.0 {
         for i in 0..n_new {
             se[i] = f64::NAN;
             lower[i] = f64::NAN;
@@ -184,8 +184,8 @@ fn compute_matrix_inverse(matrix: &Mat<f64>) -> Result<Mat<f64>, &'static str> {
     let n = matrix.nrows();
 
     let qr: faer::linalg::solvers::Qr<f64> = matrix.qr();
-    let q = qr.compute_q();
-    let r = qr.compute_r();
+    let q = qr.compute_Q();
+    let r = qr.R();
 
     // Check if R is singular
     for i in 0..n {
@@ -264,5 +264,34 @@ mod tests {
             let pi_width = pi.upper[i] - pi.lower[i];
             assert!(pi_width > ci_width, "PI should be wider than CI");
         }
+    }
+
+    #[test]
+    fn test_compute_matrix_inverse_1x1() {
+        // Test 1x1 matrix inversion (the failing case scenario)
+        let x = Mat::from_fn(10, 1, |i, _| (i + 1) as f64);
+        let xtx = x.transpose() * &x;
+
+        // xtx should be 1x1 with sum of squares = 385
+        assert_eq!(xtx.nrows(), 1);
+        assert_eq!(xtx.ncols(), 1);
+        let expected_sum = (1..=10).map(|i| (i * i) as f64).sum::<f64>();
+        assert!((xtx[(0, 0)] - expected_sum).abs() < 1e-10);
+
+        // Now compute inverse
+        let inv = compute_matrix_inverse(&xtx).expect("Should not fail");
+
+        // Check dimensions
+        assert_eq!(inv.nrows(), 1);
+        assert_eq!(inv.ncols(), 1);
+
+        // Check value: inverse of 385 should be 1/385
+        let expected_inv = 1.0 / expected_sum;
+        assert!(
+            (inv[(0, 0)] - expected_inv).abs() < 1e-10,
+            "Expected inv = {}, got {}",
+            expected_inv,
+            inv[(0, 0)]
+        );
     }
 }

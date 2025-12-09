@@ -121,7 +121,8 @@ impl GlmFamily for BinomialFamily {
             0.0
         };
 
-        2.0 * (term1 + term2)
+        // Guard against numerical precision issues that could give small negative values
+        (2.0 * (term1 + term2)).max(0.0)
     }
 
     /// Initialize μ values for IRLS iteration.

@@ -223,8 +223,8 @@ impl RidgeRegressor {
 
         // Invert using QR
         let qr: faer::linalg::solvers::Qr<f64> = xtx_aug.qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
+        let q = qr.compute_Q();
+        let r = qr.R();
 
         for i in 0..aug_size {
             if r[(i, i)].abs() < 1e-14 {
@@ -267,8 +267,8 @@ impl RidgeRegressor {
 
         // Invert using QR
         let qr: faer::linalg::solvers::Qr<f64> = xtx_reg.qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
+        let q = qr.compute_Q();
+        let r = qr.R();
 
         for i in 0..n_features {
             if r[(i, i)].abs() < 1e-14 {
@@ -317,8 +317,8 @@ impl RidgeRegressor {
 
         // Solve (X'X + λI) β = X'y using QR decomposition
         let qr = xtx_reg.qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
+        let q = qr.compute_Q();
+        let r = qr.R();
 
         // Check if R is singular
         for i in 0..n_features {
@@ -500,8 +500,8 @@ impl RidgeRegressor {
 
         // Invert using QR
         let qr = xtx_reg.qr();
-        let q = qr.compute_q();
-        let r = qr.compute_r();
+        let q = qr.compute_Q();
+        let r = qr.R();
 
         let mut xtx_inv = Mat::zeros(n_features, n_features);
         let qt = q.transpose();

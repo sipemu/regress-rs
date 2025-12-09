@@ -41,8 +41,8 @@ pub fn compute_leverage(x: &Mat<f64>, with_intercept: bool) -> Col<f64> {
 
     // Compute (X'X)^(-1) using QR decomposition
     let qr = xtx.qr();
-    let q = qr.compute_q();
-    let r = qr.compute_r();
+    let q = qr.compute_Q();
+    let r = qr.R();
 
     let mut xtx_inv: Mat<f64> = Mat::zeros(p, p);
     let qt = q.transpose();
