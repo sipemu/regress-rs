@@ -529,7 +529,55 @@ impl Regressor for BinomialRegressor {
     }
 }
 
-/// Fitted Binomial GLM model.
+/// Fitted Binomial GLM model (logistic/probit regression).
+///
+/// Contains the estimated coefficients and model diagnostics from fitting
+/// a binomial regression to binary outcome data using IRLS (Iteratively
+/// Reweighted Least Squares).
+///
+/// # Available Methods
+///
+/// - [`predict`](FittedRegressor::predict) - Predict probabilities for new data
+/// - [`predict_probability`](Self::predict_probability) - Alias for predict
+/// - [`predict_linear`](Self::predict_linear) - Predict on link scale (log-odds for logit)
+/// - [`predict_with_se`](Self::predict_with_se) - Predictions with standard errors
+/// - [`pearson_residuals`](Self::pearson_residuals) - Pearson residuals
+/// - [`deviance_residuals`](Self::deviance_residuals) - Deviance residuals
+/// - [`working_residuals`](Self::working_residuals) - Working residuals
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Binary classification data
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
+/// let y = Col::from_fn(100, |i| if i % 2 == 0 { 0.0 } else { 1.0 });
+///
+/// let fitted = BinomialRegressor::logistic()
+///     .with_intercept(true)
+///     .compute_inference(true)
+///     .build()
+///     .fit(&x, &y)?;
+///
+/// // Access model results
+/// let coefs = fitted.coefficients();
+/// let deviance = fitted.deviance;
+///
+/// // Predict probabilities
+/// let probs = fitted.predict_probability(&x_new);
+///
+/// // Get log-odds predictions
+/// let log_odds = fitted.predict_linear(&x_new);
+///
+/// // Predictions with confidence intervals
+/// let pred = fitted.predict_with_se(
+///     &x_new,
+///     PredictionType::Response,
+///     Some(IntervalType::Confidence),
+///     0.95
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct FittedBinomial {
     result: RegressionResult,
@@ -751,7 +799,35 @@ impl FittedRegressor for FittedBinomial {
     }
 }
 
-/// Builder for `BinomialRegressor`.
+/// Builder for configuring a binomial (logistic/probit) regression model.
+///
+/// Provides a fluent API for setting regression options before fitting.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Logistic regression (most common)
+/// let model = BinomialRegressor::logistic()
+///     .with_intercept(true)
+///     .build();
+///
+/// // Probit regression
+/// let model = BinomialRegressor::probit()
+///     .with_intercept(true)
+///     .build();
+///
+/// // Full configuration
+/// let model = BinomialRegressor::builder()
+///     .link(BinomialLink::Logit)
+///     .with_intercept(true)
+///     .compute_inference(true)
+///     .confidence_level(0.95)
+///     .max_iterations(100)
+///     .tolerance(1e-8)
+///     .build();
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct BinomialRegressorBuilder {
     options_builder: RegressionOptionsBuilder,
@@ -845,7 +921,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Coefficient should be positive (higher x -> higher probability of 1)
         assert!(fitted.result.coefficients[0] > 0.0);
@@ -863,7 +939,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.coefficients[0] > 0.0);
     }
@@ -877,7 +953,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.coefficients[0] > 0.0);
     }
@@ -890,7 +966,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let probs = fitted.predict_probability(&x);
 
@@ -911,7 +987,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let pearson = fitted.pearson_residuals();
         let deviance = fitted.deviance_residuals();
@@ -931,10 +1007,10 @@ mod tests {
             .compute_inference(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.std_errors.is_some());
-        let se = fitted.result.std_errors.as_ref().unwrap();
+        let se = fitted.result.std_errors.as_ref().expect("std errors exist");
         assert!(se[0] > 0.0);
     }
 
@@ -957,7 +1033,7 @@ mod tests {
             .compute_inference(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 - 2.0) / 2.0);
         let pred = fitted.predict_with_se(
@@ -973,6 +1049,203 @@ mod tests {
             // CI should contain the prediction
             assert!(pred.lower[i] <= pred.fit[i]);
             assert!(pred.upper[i] >= pred.fit[i]);
+        }
+    }
+
+    #[test]
+    fn test_new_constructor() {
+        let options = RegressionOptionsBuilder::default()
+            .with_intercept(true)
+            .build()
+            .expect("valid options");
+        let family = BinomialFamily::logistic();
+        let regressor = BinomialRegressor::new(options, family);
+
+        let (x, y) = create_test_data(100);
+        let fitted = regressor.fit(&x, &y).expect("model should fit");
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_builder_method() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::builder()
+            .link(BinomialLink::Logit)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_no_intercept() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(false)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        // Without intercept, should have no intercept term
+        assert!(fitted.result.intercept.is_none());
+    }
+
+    #[test]
+    fn test_with_offset() {
+        let (x, y) = create_test_data(100);
+        let offset = Col::from_fn(100, |i| 0.1 * (i as f64 - 50.0) / 50.0);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .offset(offset)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        // Model should still fit with offset
+        assert!(fitted.deviance < fitted.null_deviance);
+    }
+
+    #[test]
+    fn test_convergence_failure() {
+        // Create difficult data that won't converge in 1 iteration
+        let x = Mat::from_fn(10, 1, |i, _| (i as f64 - 5.0).signum());
+        let y = Col::from_fn(10, |i| if i < 5 { 0.0 } else { 1.0 });
+
+        let result = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .max_iterations(1)
+            .tolerance(1e-20)
+            .build()
+            .fit(&x, &y);
+
+        assert!(matches!(
+            result,
+            Err(RegressionError::ConvergenceFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn test_confidence_level_builder() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .compute_inference(true)
+            .confidence_level(0.99)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.std_errors.is_some());
+    }
+
+    #[test]
+    fn test_tolerance_builder() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .tolerance(1e-4)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_predict_link() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let pred_link = fitted.predict_linear(&x);
+        let pred_response = fitted.predict(&x);
+
+        // Link predictions should have larger range than probabilities
+        let link_range = pred_link.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b))
+            - pred_link.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let resp_range = pred_response
+            .iter()
+            .fold(f64::NEG_INFINITY, |a, &b| a.max(b))
+            - pred_response.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+
+        assert!(link_range > resp_range);
+    }
+
+    #[test]
+    fn test_predict_with_se_link_scale() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 - 2.0) / 2.0);
+        let pred = fitted.predict_with_se(&x_new, PredictionType::Link, None, 0.95);
+
+        // Link scale predictions should be unbounded
+        for i in 0..5 {
+            assert!(pred.fit[i].is_finite());
+            assert!(pred.se[i] > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_prediction_interval() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 - 2.0) / 2.0);
+        let pred = fitted.predict_with_se(
+            &x_new,
+            PredictionType::Response,
+            Some(IntervalType::Prediction),
+            0.95,
+        );
+
+        // Prediction intervals should be wider
+        for i in 0..5 {
+            assert!(pred.lower[i] <= pred.fit[i]);
+            assert!(pred.upper[i] >= pred.fit[i]);
+        }
+    }
+
+    #[test]
+    fn test_no_inference_prediction_se() {
+        let (x, y) = create_test_data(100);
+
+        let fitted = BinomialRegressor::logistic()
+            .with_intercept(true)
+            .compute_inference(false)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 - 2.0) / 2.0);
+        let pred = fitted.predict_with_se(&x_new, PredictionType::Response, None, 0.95);
+
+        // Without inference (xtwx_inverse is None), returns point_only with zeros
+        for i in 0..5 {
+            assert!((pred.se[i] - 0.0).abs() < 1e-10);
         }
     }
 }

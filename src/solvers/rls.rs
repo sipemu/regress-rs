@@ -333,7 +333,46 @@ impl RlsRegressor {
     }
 }
 
-/// A fitted RLS model.
+/// Fitted Recursive Least Squares (RLS) model for online learning.
+///
+/// Contains the estimated coefficients and covariance matrix (P) from fitting
+/// an RLS model. Supports incremental updates with new observations.
+///
+/// # Online Learning
+///
+/// RLS is designed for streaming data where the model is updated incrementally
+/// as new observations arrive. The forgetting factor controls how much weight
+/// is given to recent vs. older observations.
+///
+/// # Available Methods
+///
+/// - [`predict`](FittedRegressor::predict) - Predict response values
+/// - [`update`](Self::update) - Update model with new observation (online learning)
+/// - [`p_matrix`](Self::p_matrix) - Get the inverse covariance estimate
+/// - [`forgetting_factor`](Self::forgetting_factor) - Get the forgetting factor
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
+/// let y = Col::from_fn(100, |i| i as f64 + 1.0);
+///
+/// let mut fitted = RlsRegressor::builder()
+///     .with_intercept(true)
+///     .forgetting_factor(0.99)
+///     .build()
+///     .fit(&x, &y)?;
+///
+/// // Online update with new observation
+/// let x_new = Col::from_fn(2, |j| j as f64);
+/// let y_new = 5.0;
+/// let prediction = fitted.update(&x_new, y_new);
+///
+/// // Coefficients are now updated
+/// let coefs = fitted.coefficients();
+/// ```
 #[derive(Debug, Clone)]
 pub struct FittedRls {
     options: RegressionOptions,
@@ -501,7 +540,29 @@ impl FittedRegressor for FittedRls {
     }
 }
 
-/// Builder for `RlsRegressor`.
+/// Builder for configuring a Recursive Least Squares model.
+///
+/// Provides a fluent API for setting RLS-specific options like the
+/// forgetting factor for exponential weighting.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Standard RLS (all observations equally weighted)
+/// let model = RlsRegressor::builder()
+///     .with_intercept(true)
+///     .forgetting_factor(1.0)
+///     .build();
+///
+/// // Exponentially weighted RLS (recent observations weighted more)
+/// let model = RlsRegressor::builder()
+///     .with_intercept(true)
+///     .forgetting_factor(0.95)  // 5% discount per observation
+///     .initial_p_scale(100.0)   // Initial P matrix = 100 * I
+///     .build();
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct RlsRegressorBuilder {
     builder: RegressionOptionsBuilder,
@@ -551,8 +612,8 @@ mod tests {
             .build();
         let ols = OlsRegressor::builder().with_intercept(true).build();
 
-        let rls_fit = rls.fit(&x, &y).unwrap();
-        let ols_fit = ols.fit(&x, &y).unwrap();
+        let rls_fit = rls.fit(&x, &y).expect("RLS model should fit");
+        let ols_fit = ols.fit(&x, &y).expect("OLS model should fit");
 
         // Should be close (not exact due to initialization)
         assert!(
@@ -573,7 +634,7 @@ mod tests {
             .forgetting_factor(0.99)
             .build();
 
-        let fitted = model.fit(&x, &y).unwrap();
+        let fitted = model.fit(&x, &y).expect("model should fit");
 
         assert!(fitted.r_squared() > 0.9);
     }
@@ -588,7 +649,7 @@ mod tests {
             .forgetting_factor(1.0)
             .build();
 
-        let mut fitted = model.fit(&x, &y).unwrap();
+        let mut fitted = model.fit(&x, &y).expect("model should fit");
 
         // Update with a new observation
         let x_new = Col::from_fn(1, |_| 20.0);

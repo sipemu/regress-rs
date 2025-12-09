@@ -65,7 +65,7 @@ impl CoefficientInference {
             return p_vals;
         }
 
-        let t_dist = StudentsT::new(0.0, 1.0, df).unwrap();
+        let t_dist = StudentsT::new(0.0, 1.0, df).expect("valid t-distribution parameters");
 
         for j in 0..n {
             if t_statistics[j].is_nan() {
@@ -101,7 +101,7 @@ impl CoefficientInference {
             return (lower, upper);
         }
 
-        let t_dist = StudentsT::new(0.0, 1.0, df).unwrap();
+        let t_dist = StudentsT::new(0.0, 1.0, df).expect("valid t-distribution parameters");
         let alpha = 1.0 - confidence_level;
         let t_crit = t_dist.inverse_cdf(1.0 - alpha / 2.0);
 

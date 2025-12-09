@@ -396,4 +396,120 @@ mod tests {
         let expected = (0.5_f64.ln().abs()).ln().copysign(-1.0);
         assert!((link.link(0.5) - expected).abs() < 0.01);
     }
+
+    // ==================== Additional tests for coverage ====================
+
+    #[test]
+    fn test_cloglog_extreme_eta() {
+        let link = BinomialLink::Cloglog;
+
+        // Very large eta (> 10) should return value close to 1
+        let result_high = link.link_inverse(15.0);
+        assert!(result_high > 0.99);
+        assert!(result_high.is_finite());
+
+        // Very small eta (< -30) should return value close to 0
+        let result_low = link.link_inverse(-35.0);
+        assert!(result_low < 0.01);
+        assert!(result_low.is_finite());
+    }
+
+    #[test]
+    fn test_probit_derivative_extreme() {
+        let link = BinomialLink::Probit;
+
+        // At extreme μ values, pdf becomes very small, derivative caps at 1e14
+        // Test near boundaries
+        let deriv_low = link.link_derivative(1e-9);
+        assert!(deriv_low.is_finite());
+        assert!(deriv_low > 0.0);
+
+        let deriv_high = link.link_derivative(1.0 - 1e-9);
+        assert!(deriv_high.is_finite());
+        assert!(deriv_high > 0.0);
+    }
+
+    #[test]
+    fn test_cloglog_derivative_extreme() {
+        let link = BinomialLink::Cloglog;
+
+        // At μ very close to 1, -log(1-μ) becomes very small, derivative caps
+        let deriv_high = link.link_derivative(1.0 - 1e-12);
+        assert!(deriv_high.is_finite());
+        assert!(deriv_high > 0.0);
+
+        // At μ very close to 0
+        let deriv_low = link.link_derivative(1e-12);
+        assert!(deriv_low.is_finite());
+        assert!(deriv_low > 0.0);
+    }
+
+    #[test]
+    fn test_cloglog_inverse_derivative_extreme() {
+        let link = BinomialLink::Cloglog;
+
+        // Very large eta (> 10) should return ~0
+        let deriv_high = link.link_inverse_derivative(15.0);
+        assert!(deriv_high.abs() < 1e-5);
+
+        // Very small eta (< -30) should return exp(eta)
+        let deriv_low = link.link_inverse_derivative(-35.0);
+        assert!(deriv_low.is_finite());
+        assert!((deriv_low - (-35.0_f64).exp()).abs() < 1e-20);
+    }
+
+    #[test]
+    fn test_probit_extreme_values() {
+        // Test extreme probability values to hit far tail region
+        let link = BinomialLink::Probit;
+
+        // Very small probability (far tail)
+        let eta_very_low = link.link(1e-10);
+        assert!(eta_very_low < -5.0);
+        assert!(eta_very_low.is_finite());
+
+        // Very high probability (far tail)
+        let eta_very_high = link.link(1.0 - 1e-10);
+        assert!(eta_very_high > 5.0);
+        assert!(eta_very_high.is_finite());
+    }
+
+    #[test]
+    fn test_probit_boundary_conditions() {
+        // Test the exact boundary conditions in probit function
+        // p <= 1e-300 returns -38.0
+        let result_very_low = probit(1e-310);
+        assert!((result_very_low - (-38.0)).abs() < 1e-10);
+
+        // p >= 1.0 - 1e-16 returns 8.2
+        let result_very_high = probit(1.0 - 1e-17);
+        assert!((result_very_high - 8.2).abs() < 1e-10);
+
+        // p <= 1e-16 returns -8.2
+        let result_low = probit(1e-17);
+        assert!((result_low - (-8.2)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_probit_far_tail_region() {
+        // Test probabilities that hit the far tail region (r > 5.0)
+        // Need q = min(p, 1-p) such that r = sqrt(-ln(q)) > 5
+        // This means q < exp(-25) ≈ 1.4e-11
+        let result1 = probit(1e-12);
+        assert!(result1.is_finite());
+        assert!(result1 < -6.0); // Should be very negative
+
+        let result2 = probit(1.0 - 1e-12);
+        assert!(result2.is_finite());
+        assert!(result2 > 6.0); // Should be very positive
+    }
+
+    #[test]
+    fn test_probit_inverse_derivative() {
+        let link = BinomialLink::Probit;
+
+        // At η = 0: dμ/dη = φ(0) = 1/√(2π) ≈ 0.3989
+        let expected = 1.0 / (2.0 * std::f64::consts::PI).sqrt();
+        assert!((link.link_inverse_derivative(0.0) - expected).abs() < 1e-6);
+    }
 }

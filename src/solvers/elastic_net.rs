@@ -577,7 +577,7 @@ mod tests {
             .alpha(0.5)
             .build();
 
-        let fitted = model.fit(&x, &y).unwrap();
+        let fitted = model.fit(&x, &y).expect("model should fit");
 
         assert!(fitted.r_squared() > 0.9);
     }
@@ -598,7 +598,7 @@ mod tests {
             .alpha(1.0) // Pure Lasso
             .build();
 
-        let fitted = model.fit(&x, &y).unwrap();
+        let fitted = model.fit(&x, &y).expect("model should fit");
 
         // Some coefficients should be zero (sparse)
         let n_zero = fitted

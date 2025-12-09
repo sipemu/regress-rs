@@ -30,65 +30,115 @@ pub fn compute_prediction_intervals(
     has_intercept: bool,
 ) -> PredictionResult {
     let n_new = x_new.nrows();
-    let n_features = x_new.ncols();
 
+    if df <= 0.0 || mse < 0.0 {
+        return create_nan_result(predictions, n_new);
+    }
+
+    let t_crit = compute_t_critical(df, confidence_level);
+    let (se, lower, upper) = compute_all_intervals(
+        x_new,
+        xtx_inv,
+        predictions,
+        mse,
+        t_crit,
+        interval_type,
+        has_intercept,
+    );
+
+    PredictionResult::with_intervals(predictions.clone(), lower, upper, se)
+}
+
+/// Create a result with NaN values for invalid parameters.
+fn create_nan_result(predictions: &Col<f64>, n: usize) -> PredictionResult {
+    let se = Col::from_fn(n, |_| f64::NAN);
+    let lower = Col::from_fn(n, |_| f64::NAN);
+    let upper = Col::from_fn(n, |_| f64::NAN);
+    PredictionResult::with_intervals(predictions.clone(), lower, upper, se)
+}
+
+/// Compute the t-critical value for confidence intervals.
+fn compute_t_critical(df: f64, confidence_level: f64) -> f64 {
+    let t_dist = StudentsT::new(0.0, 1.0, df).expect("valid t-distribution parameters");
+    let alpha = 1.0 - confidence_level;
+    t_dist.inverse_cdf(1.0 - alpha / 2.0)
+}
+
+/// Compute intervals for all observations.
+fn compute_all_intervals(
+    x_new: &Mat<f64>,
+    xtx_inv: &Mat<f64>,
+    predictions: &Col<f64>,
+    mse: f64,
+    t_crit: f64,
+    interval_type: IntervalType,
+    has_intercept: bool,
+) -> (Col<f64>, Col<f64>, Col<f64>) {
+    let n_new = x_new.nrows();
     let mut se = Col::zeros(n_new);
     let mut lower = Col::zeros(n_new);
     let mut upper = Col::zeros(n_new);
 
-    // Handle edge cases
-    if df <= 0.0 || mse < 0.0 {
-        for i in 0..n_new {
-            se[i] = f64::NAN;
-            lower[i] = f64::NAN;
-            upper[i] = f64::NAN;
-        }
-        return PredictionResult::with_intervals(predictions.clone(), lower, upper, se);
-    }
-
-    // Get t-critical value
-    let t_dist = StudentsT::new(0.0, 1.0, df).unwrap();
-    let alpha = 1.0 - confidence_level;
-    let t_crit = t_dist.inverse_cdf(1.0 - alpha / 2.0);
-
-    // For each new observation, compute interval
     for i in 0..n_new {
-        // Build x₀ vector (possibly augmented with 1 for intercept)
-        let x0: Col<f64> = if has_intercept {
-            let mut x0_aug = Col::zeros(n_features + 1);
-            x0_aug[0] = 1.0;
-            for j in 0..n_features {
-                x0_aug[j + 1] = x_new[(i, j)];
-            }
-            x0_aug
-        } else {
-            let mut x0 = Col::zeros(n_features);
-            for j in 0..n_features {
-                x0[j] = x_new[(i, j)];
-            }
-            x0
-        };
-
-        // Compute h = x₀'(X'X)⁻¹x₀ (leverage for this point)
-        // This is a scalar: h = x₀ᵀ × (X'X)⁻¹ × x₀
-        let h = compute_leverage_single(&x0, xtx_inv);
-
-        // Compute variance
-        let var = match interval_type {
-            IntervalType::Confidence => mse * h,
-            IntervalType::Prediction => mse * (1.0 + h),
-        };
-
-        // Standard error
-        se[i] = if var >= 0.0 { var.sqrt() } else { f64::NAN };
-
-        // Confidence/Prediction bounds
-        let margin = t_crit * se[i];
-        lower[i] = predictions[i] - margin;
-        upper[i] = predictions[i] + margin;
+        let (s, l, u) = compute_single_interval(
+            x_new,
+            xtx_inv,
+            predictions[i],
+            mse,
+            t_crit,
+            interval_type,
+            has_intercept,
+            i,
+        );
+        se[i] = s;
+        lower[i] = l;
+        upper[i] = u;
     }
 
-    PredictionResult::with_intervals(predictions.clone(), lower, upper, se)
+    (se, lower, upper)
+}
+
+/// Compute interval for a single observation.
+#[allow(clippy::too_many_arguments)]
+fn compute_single_interval(
+    x_new: &Mat<f64>,
+    xtx_inv: &Mat<f64>,
+    prediction: f64,
+    mse: f64,
+    t_crit: f64,
+    interval_type: IntervalType,
+    has_intercept: bool,
+    row: usize,
+) -> (f64, f64, f64) {
+    let x0 = build_observation_vector(x_new, row, has_intercept);
+    let h = compute_leverage_single(&x0, xtx_inv);
+    let var = compute_interval_variance(mse, h, interval_type);
+    let se = if var >= 0.0 { var.sqrt() } else { f64::NAN };
+    let margin = t_crit * se;
+    (se, prediction - margin, prediction + margin)
+}
+
+/// Build the observation vector, optionally augmented with intercept.
+fn build_observation_vector(x_new: &Mat<f64>, row: usize, has_intercept: bool) -> Col<f64> {
+    let n_features = x_new.ncols();
+    if has_intercept {
+        let mut x0 = Col::zeros(n_features + 1);
+        x0[0] = 1.0;
+        for j in 0..n_features {
+            x0[j + 1] = x_new[(row, j)];
+        }
+        x0
+    } else {
+        Col::from_fn(n_features, |j| x_new[(row, j)])
+    }
+}
+
+/// Compute variance based on interval type.
+fn compute_interval_variance(mse: f64, leverage: f64, interval_type: IntervalType) -> f64 {
+    match interval_type {
+        IntervalType::Confidence => mse * leverage,
+        IntervalType::Prediction => mse * (1.0 + leverage),
+    }
 }
 
 /// Compute leverage h = x₀'(X'X)⁻¹x₀ for a single observation.
@@ -116,7 +166,24 @@ fn compute_leverage_single(x0: &Col<f64>, xtx_inv: &Mat<f64>) -> f64 {
 
 /// Compute (X'X)⁻¹ for the augmented design matrix [1 | X].
 ///
-/// This is used by fitted models to store the inverse for prediction intervals.
+/// This function computes the inverse of X'X where X is augmented with a
+/// column of ones for the intercept term. Used for computing standard errors
+/// and prediction intervals in models with intercepts.
+///
+/// # Arguments
+/// * `x` - Feature matrix (n × p), WITHOUT the intercept column
+///
+/// # Returns
+/// * `Ok(Mat<f64>)` - The (p+1) × (p+1) inverse matrix
+/// * `Err(&'static str)` - If the matrix is singular
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64);
+/// let xtx_inv = compute_xtx_inverse_augmented(&x)?;
+/// // xtx_inv is 3×3 (intercept + 2 features)
+/// ```
 pub fn compute_xtx_inverse_augmented(x: &Mat<f64>) -> Result<Mat<f64>, &'static str> {
     let n_samples = x.nrows();
     let n_features = x.ncols();
@@ -139,6 +206,26 @@ pub fn compute_xtx_inverse_augmented(x: &Mat<f64>) -> Result<Mat<f64>, &'static 
 }
 
 /// Compute (X'WX)⁻¹ for the weighted augmented design matrix.
+///
+/// This function computes the inverse of X'WX where X is augmented with a
+/// column of ones and W is a diagonal weight matrix. Used for weighted
+/// least squares (WLS) and generalized linear models (GLM).
+///
+/// # Arguments
+/// * `x` - Feature matrix (n × p), WITHOUT the intercept column
+/// * `weights` - Weight vector (n × 1), typically IRLS weights
+///
+/// # Returns
+/// * `Ok(Mat<f64>)` - The (p+1) × (p+1) inverse matrix
+/// * `Err(&'static str)` - If the matrix is singular
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64);
+/// let weights = Col::from_fn(100, |_| 1.0);  // uniform weights
+/// let xtwx_inv = compute_xtwx_inverse_augmented(&x, &weights)?;
+/// ```
 pub fn compute_xtwx_inverse_augmented(
     x: &Mat<f64>,
     weights: &Col<f64>,
@@ -174,6 +261,24 @@ pub fn compute_xtwx_inverse_augmented(
 }
 
 /// Compute (X'X)⁻¹ for a non-augmented design matrix.
+///
+/// This function computes the inverse of X'X directly without adding
+/// an intercept column. Used for models without intercepts.
+///
+/// # Arguments
+/// * `x` - Design matrix (n × p)
+///
+/// # Returns
+/// * `Ok(Mat<f64>)` - The p × p inverse matrix
+/// * `Err(&'static str)` - If the matrix is singular
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64);
+/// let xtx_inv = compute_xtx_inverse(&x)?;
+/// // xtx_inv is 2×2
+/// ```
 pub fn compute_xtx_inverse(x: &Mat<f64>) -> Result<Mat<f64>, &'static str> {
     let xtx = x.transpose() * x;
     compute_matrix_inverse(&xtx)

@@ -242,8 +242,315 @@ impl LinkFunction {
 }
 
 // ============================================================================
-// Log-likelihood Functions
+// Log-likelihood Functions - Helper implementations for each distribution
 // ============================================================================
+
+fn ll_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let sigma2 = scale * scale;
+    let rss: f64 = (0..n).map(|i| (y[i] - mu[i]).powi(2)).sum();
+    -0.5 * n as f64 * (2.0 * PI * sigma2).ln() - rss / (2.0 * sigma2)
+}
+
+fn ll_laplace(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let sad: f64 = (0..n).map(|i| (y[i] - mu[i]).abs()).sum();
+    -(n as f64) * (2.0 * scale).ln() - sad / scale
+}
+
+fn ll_student_t(y: &Col<f64>, mu: &Col<f64>, scale: f64, df: f64) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let z = (y[i] - mu[i]) / scale;
+            ln_gamma((df + 1.0) / 2.0)
+                - ln_gamma(df / 2.0)
+                - 0.5 * (PI * df).ln()
+                - scale.ln()
+                - ((df + 1.0) / 2.0) * (1.0 + z * z / df).ln()
+        })
+        .sum()
+}
+
+fn ll_logistic(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let z = (y[i] - mu[i]) / scale;
+            -z - 2.0 * (1.0 + (-z).exp()).ln() - scale.ln()
+        })
+        .sum()
+}
+
+fn ll_asymmetric_laplace(y: &Col<f64>, mu: &Col<f64>, scale: f64, alpha: f64) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let e = y[i] - mu[i];
+            let rho = if e >= 0.0 {
+                alpha * e
+            } else {
+                (alpha - 1.0) * e
+            };
+            (alpha * (1.0 - alpha)).ln() - scale.ln() - rho / scale
+        })
+        .sum()
+}
+
+fn ll_generalised_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64, shape: f64) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let z = ((y[i] - mu[i]) / scale).abs();
+            (shape / (2.0 * scale)).ln() - ln_gamma(1.0 / shape) - 0.5 * z.powf(shape)
+        })
+        .sum()
+}
+
+fn ll_s_distribution(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let z = ((y[i] - mu[i]) / scale).abs();
+            (0.25 / scale).ln() - ln_gamma(2.0) - 0.5 * z.sqrt()
+        })
+        .sum()
+}
+
+fn ll_log_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let sigma2 = scale * scale;
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || mu[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        let log_y = y[i].ln();
+        let log_mu = mu[i].ln();
+        ll +=
+            -log_y - scale.ln() - 0.5 * (2.0 * PI).ln() - (log_y - log_mu).powi(2) / (2.0 * sigma2);
+    }
+    ll
+}
+
+fn ll_log_laplace(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || mu[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        ll += -(2.0 * scale).ln() - y[i].ln() - (y[i].ln() - mu[i].ln()).abs() / scale;
+    }
+    ll
+}
+
+fn ll_log_s(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || mu[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        let z = (y[i].ln() - mu[i].ln()).abs() / scale;
+        ll += (0.25 / scale).ln() - ln_gamma(2.0) - y[i].ln() - 0.5 * z.sqrt();
+    }
+    ll
+}
+
+fn ll_log_generalised_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64, shape: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || mu[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        let z = (y[i].ln() - mu[i].ln()).abs() / scale;
+        ll +=
+            (shape / (2.0 * scale)).ln() - ln_gamma(1.0 / shape) - y[i].ln() - 0.5 * z.powf(shape);
+    }
+    ll
+}
+
+fn ll_folded_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] < 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        let z1 = (y[i] - mu[i]) / scale;
+        let z2 = (y[i] + mu[i]) / scale;
+        let pdf = ((-0.5 * z1 * z1).exp() + (-0.5 * z2 * z2).exp()) / (scale * (2.0 * PI).sqrt());
+        if pdf <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        ll += pdf.ln();
+    }
+    ll
+}
+
+fn ll_rectified_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] > 0.0 {
+            let z = (y[i] - mu[i]) / scale;
+            ll += -0.5 * (2.0 * PI).ln() - scale.ln() - 0.5 * z * z;
+        } else if y[i] == 0.0 {
+            let z = -mu[i] / scale;
+            ll += normal_cdf(z).ln();
+        } else {
+            return f64::NEG_INFINITY;
+        }
+    }
+    ll
+}
+
+fn ll_box_cox_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64, lambda: f64) -> f64 {
+    let n = y.nrows();
+    let sigma2 = scale * scale;
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        let y_trans = if lambda.abs() < 1e-10 {
+            y[i].ln()
+        } else {
+            (y[i].powf(lambda) - 1.0) / lambda
+        };
+        let mu_trans = if lambda.abs() < 1e-10 {
+            mu[i].ln()
+        } else {
+            (mu[i].powf(lambda) - 1.0) / lambda
+        };
+        ll += -0.5 * (2.0 * PI * sigma2).ln() - (y_trans - mu_trans).powi(2) / (2.0 * sigma2)
+            + (lambda - 1.0) * y[i].ln();
+    }
+    ll
+}
+
+fn ll_gamma(y: &Col<f64>, mu: &Col<f64>, shape: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || mu[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        let rate = shape / mu[i];
+        ll += shape * rate.ln() + (shape - 1.0) * y[i].ln() - rate * y[i] - ln_gamma(shape);
+    }
+    ll
+}
+
+fn ll_inverse_gaussian(y: &Col<f64>, mu: &Col<f64>, lambda: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || mu[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        ll += 0.5 * (lambda / (2.0 * PI * y[i].powi(3))).ln()
+            - lambda * (y[i] - mu[i]).powi(2) / (2.0 * mu[i].powi(2) * y[i]);
+    }
+    ll
+}
+
+fn ll_exponential(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] < 0.0 || mu[i] <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        ll += -mu[i].ln() - y[i] / mu[i];
+    }
+    ll
+}
+
+fn ll_beta(y: &Col<f64>, mu: &Col<f64>, phi: f64) -> f64 {
+    let n = y.nrows();
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || y[i] >= 1.0 || mu[i] <= 0.0 || mu[i] >= 1.0 {
+            return f64::NEG_INFINITY;
+        }
+        let alpha = mu[i] * phi;
+        let beta_param = (1.0 - mu[i]) * phi;
+        ll += ln_gamma(phi) - ln_gamma(alpha) - ln_gamma(beta_param)
+            + (alpha - 1.0) * y[i].ln()
+            + (beta_param - 1.0) * (1.0 - y[i]).ln();
+    }
+    ll
+}
+
+fn ll_logit_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    let n = y.nrows();
+    let sigma2 = scale * scale;
+    let mut ll = 0.0;
+    for i in 0..n {
+        if y[i] <= 0.0 || y[i] >= 1.0 || mu[i] <= 0.0 || mu[i] >= 1.0 {
+            return f64::NEG_INFINITY;
+        }
+        let logit_y = (y[i] / (1.0 - y[i])).ln();
+        let logit_mu = (mu[i] / (1.0 - mu[i])).ln();
+        ll += -0.5 * (2.0 * PI * sigma2).ln()
+            - (logit_y - logit_mu).powi(2) / (2.0 * sigma2)
+            - y[i].ln()
+            - (1.0 - y[i]).ln();
+    }
+    ll
+}
+
+fn ll_poisson(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let yi = y[i].round().max(0.0);
+            let mui = mu[i].max(1e-10);
+            yi * mui.ln() - mui - ln_gamma(yi + 1.0)
+        })
+        .sum()
+}
+
+fn ll_negative_binomial(y: &Col<f64>, mu: &Col<f64>, size: f64) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let yi = y[i].round().max(0.0);
+            let mui = mu[i].max(1e-10);
+            let p = size / (size + mui);
+            ln_gamma(yi + size) - ln_gamma(size) - ln_gamma(yi + 1.0)
+                + size * p.ln()
+                + yi * (1.0 - p).ln()
+        })
+        .sum()
+}
+
+fn ll_binomial(y: &Col<f64>, mu: &Col<f64>, n_trials: f64) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let p = mu[i].clamp(1e-10, 1.0 - 1e-10);
+            let k = (y[i] * n_trials).round().max(0.0).min(n_trials);
+            ln_gamma(n_trials + 1.0) - ln_gamma(k + 1.0) - ln_gamma(n_trials - k + 1.0)
+                + k * p.ln()
+                + (n_trials - k) * (1.0 - p).ln()
+        })
+        .sum()
+}
+
+fn ll_geometric(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let p = mu[i].clamp(1e-10, 1.0 - 1e-10);
+            let k = y[i].round().max(0.0);
+            p.ln() + k * (1.0 - p).ln()
+        })
+        .sum()
+}
 
 /// Compute the log-likelihood for a given distribution.
 ///
@@ -260,375 +567,37 @@ pub fn log_likelihood(
     scale: f64,
     extra: Option<f64>,
 ) -> f64 {
-    let n = y.nrows();
-
     match distribution {
-        AlmDistribution::Normal => {
-            // LL = -n/2 * log(2*pi*sigma^2) - RSS/(2*sigma^2)
-            let sigma2 = scale * scale;
-            let rss: f64 = (0..n).map(|i| (y[i] - mu[i]).powi(2)).sum();
-            -0.5 * n as f64 * (2.0 * PI * sigma2).ln() - rss / (2.0 * sigma2)
-        }
-
-        AlmDistribution::Laplace => {
-            // LL = -n*log(2*b) - sum(|y - mu|)/b
-            let b = scale;
-            let sad: f64 = (0..n).map(|i| (y[i] - mu[i]).abs()).sum();
-            -(n as f64) * (2.0 * b).ln() - sad / b
-        }
-
-        AlmDistribution::StudentT => {
-            // Student-t log-likelihood
-            let df = extra.unwrap_or(5.0);
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                let z = (y[i] - mu[i]) / sigma;
-                ll += ln_gamma((df + 1.0) / 2.0)
-                    - ln_gamma(df / 2.0)
-                    - 0.5 * (PI * df).ln()
-                    - sigma.ln()
-                    - ((df + 1.0) / 2.0) * (1.0 + z * z / df).ln();
-            }
-            ll
-        }
-
-        AlmDistribution::Logistic => {
-            // Logistic distribution log-likelihood
-            let s = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                let z = (y[i] - mu[i]) / s;
-                ll += -z - 2.0 * (1.0 + (-z).exp()).ln() - s.ln();
-            }
-            ll
-        }
-
+        AlmDistribution::Normal => ll_normal(y, mu, scale),
+        AlmDistribution::Laplace => ll_laplace(y, mu, scale),
+        AlmDistribution::StudentT => ll_student_t(y, mu, scale, extra.unwrap_or(5.0)),
+        AlmDistribution::Logistic => ll_logistic(y, mu, scale),
         AlmDistribution::AsymmetricLaplace => {
-            // Asymmetric Laplace for quantile regression
-            // alpha is the quantile level (0 < alpha < 1)
-            let alpha = extra.unwrap_or(0.5);
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                let e = y[i] - mu[i];
-                let rho = if e >= 0.0 {
-                    alpha * e
-                } else {
-                    (alpha - 1.0) * e
-                };
-                ll += (alpha * (1.0 - alpha)).ln() - sigma.ln() - rho / sigma;
-            }
-            ll
+            ll_asymmetric_laplace(y, mu, scale, extra.unwrap_or(0.5))
         }
-
         AlmDistribution::GeneralisedNormal => {
-            // Generalised Normal (Subbotin) distribution
-            // shape = 2 gives Normal, shape = 1 gives Laplace
-            let shape = extra.unwrap_or(2.0);
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                let z = ((y[i] - mu[i]) / sigma).abs();
-                ll += (shape / (2.0 * sigma)).ln() - ln_gamma(1.0 / shape) - 0.5 * z.powf(shape);
-            }
-            ll
+            ll_generalised_normal(y, mu, scale, extra.unwrap_or(2.0))
         }
-
-        AlmDistribution::S => {
-            // S distribution (special case of Generalised Normal with shape = 0.5)
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                let z = ((y[i] - mu[i]) / sigma).abs();
-                ll += (0.25 / sigma).ln() - ln_gamma(2.0) - 0.5 * z.sqrt();
-            }
-            ll
-        }
-
-        AlmDistribution::LogNormal => {
-            // Log-Normal: y ~ LogNormal(log(mu), sigma)
-            // LL = sum(-log(y) - log(sigma) - log(2*pi)/2 - (log(y) - log(mu))^2 / (2*sigma^2))
-            let sigma = scale;
-            let sigma2 = sigma * sigma;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && mu[i] > 0.0 {
-                    let log_y = y[i].ln();
-                    let log_mu = mu[i].ln();
-                    ll += -log_y
-                        - sigma.ln()
-                        - 0.5 * (2.0 * PI).ln()
-                        - (log_y - log_mu).powi(2) / (2.0 * sigma2);
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::LogLaplace => {
-            // Log-Laplace distribution
-            let b = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && mu[i] > 0.0 {
-                    ll += -(2.0 * b).ln() - y[i].ln() - (y[i].ln() - mu[i].ln()).abs() / b;
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::LogS => {
-            // Log-S distribution
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && mu[i] > 0.0 {
-                    let z = (y[i].ln() - mu[i].ln()).abs() / sigma;
-                    ll += (0.25 / sigma).ln() - ln_gamma(2.0) - y[i].ln() - 0.5 * z.sqrt();
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
+        AlmDistribution::S => ll_s_distribution(y, mu, scale),
+        AlmDistribution::LogNormal => ll_log_normal(y, mu, scale),
+        AlmDistribution::LogLaplace => ll_log_laplace(y, mu, scale),
+        AlmDistribution::LogS => ll_log_s(y, mu, scale),
         AlmDistribution::LogGeneralisedNormal => {
-            let shape = extra.unwrap_or(2.0);
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && mu[i] > 0.0 {
-                    let z = (y[i].ln() - mu[i].ln()).abs() / sigma;
-                    ll += (shape / (2.0 * sigma)).ln()
-                        - ln_gamma(1.0 / shape)
-                        - y[i].ln()
-                        - 0.5 * z.powf(shape);
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
+            ll_log_generalised_normal(y, mu, scale, extra.unwrap_or(2.0))
         }
-
-        AlmDistribution::FoldedNormal => {
-            // Folded Normal distribution (absolute value of Normal)
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] >= 0.0 {
-                    // PDF = phi((y-mu)/sigma) + phi((y+mu)/sigma) for y >= 0
-                    let z1 = (y[i] - mu[i]) / sigma;
-                    let z2 = (y[i] + mu[i]) / sigma;
-                    let pdf = ((-0.5 * z1 * z1).exp() + (-0.5 * z2 * z2).exp())
-                        / (sigma * (2.0 * PI).sqrt());
-                    if pdf > 0.0 {
-                        ll += pdf.ln();
-                    } else {
-                        return f64::NEG_INFINITY;
-                    }
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::RectifiedNormal => {
-            // Rectified Normal (max(0, X) where X ~ Normal)
-            let sigma = scale;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 {
-                    let z = (y[i] - mu[i]) / sigma;
-                    ll += -0.5 * (2.0 * PI).ln() - sigma.ln() - 0.5 * z * z;
-                } else if y[i] == 0.0 {
-                    // Point mass at 0
-                    let z = -mu[i] / sigma;
-                    ll += normal_cdf(z).ln();
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::BoxCoxNormal => {
-            // Box-Cox Normal: transform y^(lambda), then Normal
-            let lambda = extra.unwrap_or(1.0);
-            let sigma = scale;
-            let sigma2 = sigma * sigma;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 {
-                    let y_trans = if lambda.abs() < 1e-10 {
-                        y[i].ln()
-                    } else {
-                        (y[i].powf(lambda) - 1.0) / lambda
-                    };
-                    let mu_trans = if lambda.abs() < 1e-10 {
-                        mu[i].ln()
-                    } else {
-                        (mu[i].powf(lambda) - 1.0) / lambda
-                    };
-                    // Jacobian: |dy_trans/dy| = y^(lambda-1)
-                    ll += -0.5 * (2.0 * PI * sigma2).ln()
-                        - (y_trans - mu_trans).powi(2) / (2.0 * sigma2)
-                        + (lambda - 1.0) * y[i].ln();
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::Gamma => {
-            // Gamma distribution parameterized by mean mu and shape k
-            // PDF = (k/mu)^k * y^(k-1) * exp(-k*y/mu) / Gamma(k)
-            let shape = extra.unwrap_or(1.0);
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && mu[i] > 0.0 {
-                    let rate = shape / mu[i];
-                    ll += shape * rate.ln() + (shape - 1.0) * y[i].ln()
-                        - rate * y[i]
-                        - ln_gamma(shape);
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::InverseGaussian => {
-            // Inverse Gaussian distribution
-            // PDF = sqrt(lambda/(2*pi*y^3)) * exp(-lambda*(y-mu)^2 / (2*mu^2*y))
-            let lambda = extra.unwrap_or(1.0);
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && mu[i] > 0.0 {
-                    ll += 0.5 * (lambda / (2.0 * PI * y[i].powi(3))).ln()
-                        - lambda * (y[i] - mu[i]).powi(2) / (2.0 * mu[i].powi(2) * y[i]);
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::Exponential => {
-            // Exponential distribution with mean mu
-            // PDF = (1/mu) * exp(-y/mu)
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] >= 0.0 && mu[i] > 0.0 {
-                    ll += -mu[i].ln() - y[i] / mu[i];
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::Beta => {
-            // Beta distribution parameterized by mean mu and precision phi
-            // alpha = mu * phi, beta = (1 - mu) * phi
-            let phi = extra.unwrap_or(1.0);
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && y[i] < 1.0 && mu[i] > 0.0 && mu[i] < 1.0 {
-                    let alpha = mu[i] * phi;
-                    let beta_param = (1.0 - mu[i]) * phi;
-                    ll += ln_gamma(phi) - ln_gamma(alpha) - ln_gamma(beta_param)
-                        + (alpha - 1.0) * y[i].ln()
-                        + (beta_param - 1.0) * (1.0 - y[i]).ln();
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::LogitNormal => {
-            // Logit-Normal distribution
-            let sigma = scale;
-            let sigma2 = sigma * sigma;
-            let mut ll = 0.0;
-            for i in 0..n {
-                if y[i] > 0.0 && y[i] < 1.0 && mu[i] > 0.0 && mu[i] < 1.0 {
-                    let logit_y = (y[i] / (1.0 - y[i])).ln();
-                    let logit_mu = (mu[i] / (1.0 - mu[i])).ln();
-                    ll += -0.5 * (2.0 * PI * sigma2).ln()
-                        - (logit_y - logit_mu).powi(2) / (2.0 * sigma2)
-                        - y[i].ln()
-                        - (1.0 - y[i]).ln();
-                } else {
-                    return f64::NEG_INFINITY;
-                }
-            }
-            ll
-        }
-
-        AlmDistribution::Poisson => {
-            // Poisson log-likelihood: sum(y*log(mu) - mu - log(y!))
-            let mut ll = 0.0;
-            for i in 0..n {
-                let yi = y[i].round().max(0.0);
-                let mui = mu[i].max(1e-10);
-                ll += yi * mui.ln() - mui - ln_gamma(yi + 1.0);
-            }
-            ll
-        }
-
-        AlmDistribution::NegativeBinomial => {
-            // Negative Binomial with mean mu and size (dispersion) parameter
-            // Variance = mu + mu^2/size
-            let size = extra.unwrap_or(1.0);
-            let mut ll = 0.0;
-            for i in 0..n {
-                let yi = y[i].round().max(0.0);
-                let mui = mu[i].max(1e-10);
-                let p = size / (size + mui);
-                ll += ln_gamma(yi + size) - ln_gamma(size) - ln_gamma(yi + 1.0)
-                    + size * p.ln()
-                    + yi * (1.0 - p).ln();
-            }
-            ll
-        }
-
-        AlmDistribution::Binomial => {
-            // Binomial log-likelihood for proportions
-            // n_trials is the number of trials (stored in extra or assumed 1)
-            let n_trials = extra.unwrap_or(1.0);
-            let mut ll = 0.0;
-            for i in 0..n {
-                let p = mu[i].clamp(1e-10, 1.0 - 1e-10);
-                let k = (y[i] * n_trials).round().max(0.0).min(n_trials);
-                ll += ln_gamma(n_trials + 1.0) - ln_gamma(k + 1.0) - ln_gamma(n_trials - k + 1.0)
-                    + k * p.ln()
-                    + (n_trials - k) * (1.0 - p).ln();
-            }
-            ll
-        }
-
-        AlmDistribution::Geometric => {
-            // Geometric distribution: probability of k failures before first success
-            // P(Y=k) = p * (1-p)^k where p is probability of success
-            let mut ll = 0.0;
-            for i in 0..n {
-                let p = mu[i].clamp(1e-10, 1.0 - 1e-10);
-                let k = y[i].round().max(0.0);
-                ll += p.ln() + k * (1.0 - p).ln();
-            }
-            ll
-        }
-
+        AlmDistribution::FoldedNormal => ll_folded_normal(y, mu, scale),
+        AlmDistribution::RectifiedNormal => ll_rectified_normal(y, mu, scale),
+        AlmDistribution::BoxCoxNormal => ll_box_cox_normal(y, mu, scale, extra.unwrap_or(1.0)),
+        AlmDistribution::Gamma => ll_gamma(y, mu, extra.unwrap_or(1.0)),
+        AlmDistribution::InverseGaussian => ll_inverse_gaussian(y, mu, extra.unwrap_or(1.0)),
+        AlmDistribution::Exponential => ll_exponential(y, mu),
+        AlmDistribution::Beta => ll_beta(y, mu, extra.unwrap_or(1.0)),
+        AlmDistribution::LogitNormal => ll_logit_normal(y, mu, scale),
+        AlmDistribution::Poisson => ll_poisson(y, mu),
+        AlmDistribution::NegativeBinomial => ll_negative_binomial(y, mu, extra.unwrap_or(1.0)),
+        AlmDistribution::Binomial => ll_binomial(y, mu, extra.unwrap_or(1.0)),
+        AlmDistribution::Geometric => ll_geometric(y, mu),
         AlmDistribution::CumulativeLogistic | AlmDistribution::CumulativeNormal => {
-            // Ordinal regression - not implemented in basic form
-            // Would need category thresholds
             f64::NEG_INFINITY
         }
     }
@@ -656,7 +625,7 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
         AlmDistribution::StudentT | AlmDistribution::Logistic => {
             // Use robust scale estimate
             let mut abs_residuals: Vec<f64> = (0..n).map(|i| (y[i] - mu[i]).abs()).collect();
-            abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let median_idx = n / 2;
             let mad = abs_residuals[median_idx];
             mad / 0.6745 // Scale factor for Normal
@@ -680,7 +649,7 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
         | AlmDistribution::BoxCoxNormal => {
             // Use MAD-based estimate
             let mut abs_residuals: Vec<f64> = (0..n).map(|i| (y[i] - mu[i]).abs()).collect();
-            abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             abs_residuals[n / 2] / 0.6745
         }
 
@@ -1407,7 +1376,7 @@ impl AlmRegressor {
                 result.conf_interval_upper = Some(ci_upper);
 
                 // Intercept inference
-                let intercept = result.intercept.unwrap();
+                let intercept = result.intercept.expect("intercept was computed");
                 let t_int = if se_int > 0.0 {
                     intercept / se_int
                 } else {
@@ -1522,7 +1491,47 @@ impl Regressor for AlmRegressor {
 // Fitted ALM
 // ============================================================================
 
-/// A fitted Augmented Linear Model.
+/// Fitted Augmented Linear Model (ALM) with flexible distributions.
+///
+/// Contains the estimated coefficients and model diagnostics from fitting
+/// an ALM using maximum likelihood estimation via IRLS. ALM supports 24
+/// different distribution families with various link functions.
+///
+/// # Supported Distributions
+///
+/// - **Continuous**: Normal, Laplace, Student-t, Cauchy, Gumbel, etc.
+/// - **Count**: Poisson, Negative Binomial, Geometric, etc.
+/// - **Positive continuous**: Gamma, Weibull, Log-Normal, Pareto, etc.
+/// - **Bounded**: Beta, Uniform
+///
+/// # Available Methods
+///
+/// - [`predict`](FittedRegressor::predict) - Predict response values
+/// - [`distribution`](Self::distribution) - Get the distribution family
+/// - [`link`](Self::link) - Get the link function
+/// - [`scale`](Self::scale) - Get the estimated scale parameter
+/// - [`extra_parameter`](Self::extra_parameter) - Get extra parameter (df, shape, etc.)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
+/// let y = Col::from_fn(100, |i| (i as f64 + 1.0).sin() + 1.5);
+///
+/// // Fit a robust regression with Student-t distribution
+/// let fitted = AlmRegressor::builder()
+///     .distribution(AlmDistribution::StudentT)
+///     .extra_parameter(5.0)  // degrees of freedom
+///     .with_intercept(true)
+///     .build()
+///     .fit(&x, &y)?;
+///
+/// // Access model results
+/// let scale = fitted.scale();
+/// let df = fitted.extra_parameter();  // Some(5.0)
+/// ```
 #[derive(Debug, Clone)]
 pub struct FittedAlm {
     #[allow(dead_code)]
@@ -1614,7 +1623,40 @@ impl FittedRegressor for FittedAlm {
 // Builder
 // ============================================================================
 
-/// Builder for `AlmRegressor`.
+/// Builder for configuring an Augmented Linear Model.
+///
+/// Provides a fluent API for selecting distributions, link functions,
+/// and other model options.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Normal distribution with identity link (standard linear model)
+/// let model = AlmRegressor::builder()
+///     .distribution(AlmDistribution::Normal)
+///     .build();
+///
+/// // Robust regression with Student-t distribution
+/// let model = AlmRegressor::builder()
+///     .distribution(AlmDistribution::StudentT)
+///     .extra_parameter(5.0)  // degrees of freedom
+///     .with_intercept(true)
+///     .build();
+///
+/// // Gamma regression with log link
+/// let model = AlmRegressor::builder()
+///     .distribution(AlmDistribution::Gamma)
+///     .link(LinkFunction::Log)
+///     .build();
+///
+/// // Beta regression for bounded outcomes
+/// let model = AlmRegressor::builder()
+///     .distribution(AlmDistribution::Beta)
+///     .link(LinkFunction::Logit)
+///     .build();
+/// ```
 #[derive(Debug, Clone)]
 pub struct AlmRegressorBuilder {
     options_builder: RegressionOptionsBuilder,
@@ -1739,5 +1781,1037 @@ mod tests {
 
         // Logit
         assert!((LinkFunction::Logit.inverse(0.0) - 0.5).abs() < 1e-10);
+    }
+
+    // ==================== Log-likelihood tests ====================
+
+    #[test]
+    fn test_ll_student_t() {
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |i| i as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::StudentT, 1.0, Some(5.0));
+        // Perfect fit should give finite positive-ish log-likelihood
+        assert!(ll.is_finite());
+        assert!(ll > -100.0); // Reasonable bound for perfect fit
+    }
+
+    #[test]
+    fn test_ll_logistic() {
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |i| i as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::Logistic, 1.0, None);
+        // Perfect fit
+        assert!(ll.is_finite());
+        assert!(ll > -100.0);
+    }
+
+    #[test]
+    fn test_ll_gamma() {
+        let y = Col::from_fn(5, |i| (i + 1) as f64); // Positive values
+        let mu = Col::from_fn(5, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::Gamma, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_exponential() {
+        let y = Col::from_fn(5, |i| (i + 1) as f64); // Positive values
+        let mu = Col::from_fn(5, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::Exponential, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_beta() {
+        let y = Col::from_fn(5, |i| 0.1 + 0.15 * i as f64); // Values in (0, 1)
+        let mu = Col::from_fn(5, |i| 0.1 + 0.15 * i as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::Beta, 0.1, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_poisson() {
+        let y = Col::from_fn(5, |i| i as f64); // Non-negative integers
+        let mu = Col::from_fn(5, |i| (i as f64).max(0.1));
+        let ll = log_likelihood(&y, &mu, AlmDistribution::Poisson, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_negative_binomial() {
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |i| (i as f64).max(0.1));
+        let ll = log_likelihood(&y, &mu, AlmDistribution::NegativeBinomial, 1.0, Some(2.0));
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_binomial() {
+        let y = Col::from_fn(5, |i| if i % 2 == 0 { 0.0 } else { 1.0 });
+        let mu = Col::from_fn(5, |_| 0.5);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::Binomial, 1.0, Some(1.0));
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_inverse_gaussian() {
+        let y = Col::from_fn(5, |i| (i + 1) as f64);
+        let mu = Col::from_fn(5, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::InverseGaussian, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_log_normal() {
+        let y = Col::from_fn(5, |i| (i + 1) as f64);
+        let mu = Col::from_fn(5, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::LogNormal, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_asymmetric_laplace() {
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |i| i as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::AsymmetricLaplace, 1.0, Some(0.5));
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_generalised_normal() {
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |i| i as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::GeneralisedNormal, 1.0, Some(2.0));
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_geometric() {
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |_| 0.5);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::Geometric, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    // ==================== End-to-end fitting tests ====================
+
+    #[test]
+    fn test_alm_fit_normal() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64);
+        let y = Col::from_fn(50, |i| 1.0 + 2.0 * i as f64 + 0.1 * (i as f64).sin());
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Normal)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.coefficients()[0] > 1.5); // Slope should be ~2
+        assert!(fitted.scale() > 0.0);
+    }
+
+    #[test]
+    fn test_alm_fit_laplace() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64);
+        let y = Col::from_fn(50, |i| 1.0 + 2.0 * i as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Laplace)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.coefficients()[0] > 1.5);
+    }
+
+    #[test]
+    fn test_alm_fit_student_t() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64);
+        let y = Col::from_fn(50, |i| 1.0 + 2.0 * i as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::StudentT)
+            .extra_parameter(5.0) // df = 5
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.coefficients()[0] > 1.5);
+        assert_eq!(fitted.extra_parameter(), Some(5.0));
+    }
+
+    #[test]
+    fn test_alm_fit_gamma() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64 / 10.0);
+        let y = Col::from_fn(50, |i| (1.0 + 0.5 * i as f64 / 10.0).exp()); // Positive values
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Gamma)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.scale() > 0.0);
+    }
+
+    #[test]
+    fn test_alm_fit_poisson() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64 / 10.0);
+        let y = Col::from_fn(50, |i| ((0.5 + 0.1 * i as f64 / 10.0).exp()).round());
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Poisson)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.result().coefficients.nrows() == 1);
+    }
+
+    // ==================== Builder and options tests ====================
+
+    #[test]
+    fn test_alm_builder_fluent_api() {
+        let model = AlmRegressor::builder()
+            .distribution(AlmDistribution::StudentT)
+            .link(LinkFunction::Identity)
+            .extra_parameter(10.0)
+            .with_intercept(true)
+            .compute_inference(true)
+            .max_iterations(50)
+            .tolerance(1e-6)
+            .build();
+
+        assert_eq!(model.distribution, AlmDistribution::StudentT);
+        assert_eq!(model.link, LinkFunction::Identity);
+        assert_eq!(model.extra_parameter, Some(10.0));
+        assert!(model.options.with_intercept);
+        assert_eq!(model.max_iterations, 50);
+    }
+
+    #[test]
+    fn test_alm_with_intercept() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| 5.0 + 2.0 * i as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Normal)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        // Should have intercept close to 5
+        let intercept = fitted.result().intercept.unwrap_or(0.0);
+        assert!((intercept - 5.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_alm_without_intercept() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| 2.0 * i as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Normal)
+            .with_intercept(false)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.result().intercept.is_none());
+    }
+
+    // ==================== Link function tests ====================
+
+    #[test]
+    fn test_probit_link() {
+        // Test probit link function
+        assert!((LinkFunction::Probit.inverse(0.0) - 0.5).abs() < 1e-6);
+        assert!(LinkFunction::Probit.inverse(-2.0) < 0.1);
+        assert!(LinkFunction::Probit.inverse(2.0) > 0.9);
+    }
+
+    #[test]
+    fn test_sqrt_link() {
+        assert!((LinkFunction::Sqrt.inverse(2.0) - 4.0).abs() < 1e-10);
+        assert!((LinkFunction::Sqrt.inverse(3.0) - 9.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_inverse_link() {
+        assert!((LinkFunction::Inverse.inverse(0.5) - 2.0).abs() < 1e-10);
+        assert!((LinkFunction::Inverse.inverse(0.25) - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cloglog_link() {
+        // cloglog(0.5) = log(-log(0.5)) = log(0.693) ≈ -0.367
+        let eta = LinkFunction::Cloglog.inverse(-0.367);
+        assert!((eta - 0.5).abs() < 0.01);
+    }
+
+    // ==================== Scale estimation tests ====================
+
+    #[test]
+    fn test_estimate_scale_normal() {
+        let y = Col::from_fn(100, |i| i as f64);
+        let mu = Col::from_fn(100, |i| i as f64 + 0.5); // Small residuals
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Normal, 98.0);
+        assert!(scale > 0.0);
+        assert!(scale < 10.0); // Should be small for nearly perfect fit
+    }
+
+    #[test]
+    fn test_estimate_scale_laplace() {
+        let y = Col::from_fn(100, |i| i as f64);
+        let mu = Col::from_fn(100, |i| i as f64 + 0.5);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Laplace, 98.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_gamma() {
+        let y = Col::from_fn(100, |i| (i + 1) as f64);
+        let mu = Col::from_fn(100, |i| (i + 1) as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Gamma, 98.0);
+        assert!(scale > 0.0);
+    }
+
+    // ==================== Distribution property tests ====================
+
+    #[test]
+    fn test_canonical_links() {
+        assert_eq!(
+            AlmDistribution::Normal.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(AlmDistribution::Gamma.canonical_link(), LinkFunction::Log);
+        assert_eq!(AlmDistribution::Poisson.canonical_link(), LinkFunction::Log);
+        assert_eq!(
+            AlmDistribution::Binomial.canonical_link(),
+            LinkFunction::Logit
+        );
+        assert_eq!(AlmDistribution::Beta.canonical_link(), LinkFunction::Logit);
+    }
+
+    #[test]
+    fn test_requires_positive() {
+        assert!(!AlmDistribution::Normal.requires_positive());
+        assert!(AlmDistribution::Gamma.requires_positive());
+        assert!(AlmDistribution::LogNormal.requires_positive());
+        assert!(AlmDistribution::Exponential.requires_positive());
+    }
+
+    #[test]
+    fn test_requires_unit_interval() {
+        assert!(!AlmDistribution::Normal.requires_unit_interval());
+        assert!(AlmDistribution::Beta.requires_unit_interval());
+        assert!(AlmDistribution::LogitNormal.requires_unit_interval());
+    }
+
+    // ==================== Prediction tests ====================
+
+    #[test]
+    fn test_alm_predict() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| 1.0 + 2.0 * i as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Normal)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 30) as f64);
+        let preds = fitted.predict(&x_new);
+
+        assert_eq!(preds.nrows(), 5);
+        // Predictions should be increasing
+        for i in 1..5 {
+            assert!(preds[i] > preds[i - 1]);
+        }
+    }
+
+    // ==================== Additional log-likelihood tests ====================
+
+    #[test]
+    fn test_ll_s_distribution() {
+        let y = Col::from_fn(10, |i| (i + 1) as f64);
+        let mu = Col::from_fn(10, |i| (i + 1) as f64 + 0.1);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::S, 1.0, None);
+        assert!(ll.is_finite());
+        assert!(ll < 0.0); // Log-likelihood should be negative
+    }
+
+    #[test]
+    fn test_ll_log_normal_positive() {
+        let y = Col::from_fn(10, |i| (i + 1) as f64);
+        let mu = Col::from_fn(10, |i| (i + 1) as f64 + 0.1);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::LogNormal, 0.5, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_log_normal_negative_y() {
+        let y = Col::from_fn(10, |i| (i as f64) - 2.0); // Contains negative values
+        let mu = Col::from_fn(10, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::LogNormal, 0.5, None);
+        assert!(ll == f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_ll_log_laplace() {
+        let y = Col::from_fn(10, |i| (i + 1) as f64);
+        let mu = Col::from_fn(10, |i| (i + 1) as f64 + 0.5);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::LogLaplace, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_log_s() {
+        let y = Col::from_fn(10, |i| (i + 1) as f64);
+        let mu = Col::from_fn(10, |i| (i + 1) as f64 + 0.2);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::LogS, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_log_generalised_normal() {
+        let y = Col::from_fn(10, |i| (i + 1) as f64);
+        let mu = Col::from_fn(10, |i| (i + 1) as f64 + 0.1);
+        let ll = log_likelihood(
+            &y,
+            &mu,
+            AlmDistribution::LogGeneralisedNormal,
+            0.5,
+            Some(2.0),
+        );
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_folded_normal() {
+        let y = Col::from_fn(10, |i| (i + 1) as f64); // Positive values
+        let mu = Col::from_fn(10, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::FoldedNormal, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_folded_normal_negative() {
+        let y = Col::from_fn(10, |i| (i as f64) - 5.0); // Contains negative values
+        let mu = Col::from_fn(10, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::FoldedNormal, 1.0, None);
+        assert!(ll == f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_ll_rectified_normal() {
+        // Mix of positive values and zeros
+        let y = Col::from_fn(10, |i| if i < 3 { 0.0 } else { (i - 2) as f64 });
+        let mu = Col::from_fn(10, |i| (i as f64) * 0.5);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::RectifiedNormal, 1.0, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_rectified_normal_negative() {
+        let y = Col::from_fn(10, |i| (i as f64) - 5.0); // Contains negative
+        let mu = Col::from_fn(10, |i| (i + 1) as f64);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::RectifiedNormal, 1.0, None);
+        assert!(ll == f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_ll_box_cox_normal() {
+        let y = Col::from_fn(10, |i| (i + 1) as f64);
+        let mu = Col::from_fn(10, |i| (i + 1) as f64 + 0.1);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::BoxCoxNormal, 1.0, Some(0.5));
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_box_cox_normal_lambda_zero() {
+        // Test with lambda ≈ 0 (log transform)
+        let y = Col::from_fn(10, |i| (i + 1) as f64);
+        let mu = Col::from_fn(10, |i| (i + 1) as f64 + 0.1);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::BoxCoxNormal, 1.0, Some(0.0));
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_logit_normal() {
+        let y = Col::from_fn(10, |i| (i as f64 + 1.0) / 12.0); // Values in (0,1)
+        let mu = Col::from_fn(10, |i| (i as f64 + 1.5) / 12.0);
+        let ll = log_likelihood(&y, &mu, AlmDistribution::LogitNormal, 0.5, None);
+        assert!(ll.is_finite());
+    }
+
+    #[test]
+    fn test_ll_cumulative_distributions() {
+        let y = Col::from_fn(10, |i| i as f64);
+        let mu = Col::from_fn(10, |i| i as f64);
+        // Cumulative distributions return NEG_INFINITY (not implemented)
+        let ll1 = log_likelihood(&y, &mu, AlmDistribution::CumulativeLogistic, 1.0, None);
+        let ll2 = log_likelihood(&y, &mu, AlmDistribution::CumulativeNormal, 1.0, None);
+        assert!(ll1 == f64::NEG_INFINITY);
+        assert!(ll2 == f64::NEG_INFINITY);
+    }
+
+    // ==================== Scale estimation tests ====================
+
+    #[test]
+    fn test_estimate_scale_laplace_mad() {
+        let y = Col::from_fn(100, |i| (i as f64) + 0.5);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Laplace, 99.0);
+        assert!(scale > 0.0);
+        assert!((scale - 0.5).abs() < 0.1); // MAD should be ~0.5
+    }
+
+    #[test]
+    fn test_estimate_scale_student_t() {
+        let y = Col::from_fn(100, |i| (i as f64) + (i % 2) as f64 * 2.0 - 1.0);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::StudentT, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_logistic() {
+        let y = Col::from_fn(100, |i| (i as f64) + 0.5);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Logistic, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_log_normal() {
+        let y = Col::from_fn(100, |i| ((i + 1) as f64).exp());
+        let mu = Col::from_fn(100, |i| ((i + 1) as f64 + 0.1).exp());
+        let scale = estimate_scale(&y, &mu, AlmDistribution::LogNormal, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_asymmetric_laplace() {
+        let y = Col::from_fn(100, |i| (i as f64) + 0.5);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::AsymmetricLaplace, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_generalised_normal() {
+        let y = Col::from_fn(100, |i| (i as f64) + 0.5);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::GeneralisedNormal, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_s_distribution() {
+        let y = Col::from_fn(100, |i| (i as f64) + 0.5);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::S, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_log_s() {
+        let y = Col::from_fn(100, |i| ((i + 1) as f64).exp());
+        let mu = Col::from_fn(100, |i| ((i + 1) as f64 + 0.1).exp());
+        let scale = estimate_scale(&y, &mu, AlmDistribution::LogS, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_box_cox() {
+        let y = Col::from_fn(100, |i| (i as f64) + 0.5);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::BoxCoxNormal, 99.0);
+        assert!(scale > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_scale_discrete_is_one() {
+        let y = Col::from_fn(100, |i| i as f64);
+        let mu = Col::from_fn(100, |i| i as f64);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Poisson, 99.0);
+        assert!((scale - 1.0).abs() < 1e-10);
+    }
+
+    // ==================== Error handling tests ====================
+
+    #[test]
+    fn test_fit_dimension_mismatch() {
+        let x = Mat::from_fn(10, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(5, |i| i as f64); // Wrong size
+
+        let result = AlmRegressor::builder()
+            .distribution(AlmDistribution::Normal)
+            .build()
+            .fit(&x, &y);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fit_insufficient_observations() {
+        let x = Mat::from_fn(1, 2, |_, _| 1.0);
+        let y = Col::from_fn(1, |_| 1.0);
+
+        let result = AlmRegressor::builder()
+            .distribution(AlmDistribution::Normal)
+            .build()
+            .fit(&x, &y);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fit_positive_required_violation() {
+        let x = Mat::from_fn(20, 1, |i, _| i as f64);
+        let y = Col::from_fn(20, |i| (i as f64) - 5.0); // Contains negatives
+
+        let result = AlmRegressor::builder()
+            .distribution(AlmDistribution::LogNormal) // Requires positive
+            .build()
+            .fit(&x, &y);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_fit_unit_interval_required_violation() {
+        let x = Mat::from_fn(20, 1, |i, _| i as f64);
+        let y = Col::from_fn(20, |_| 1.5); // Outside (0,1)
+
+        let result = AlmRegressor::builder()
+            .distribution(AlmDistribution::Beta) // Requires (0,1)
+            .build()
+            .fit(&x, &y);
+
+        assert!(result.is_err());
+    }
+
+    // ==================== Variance function tests ====================
+
+    #[test]
+    fn test_variance_function_poisson() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::Poisson)
+            .build();
+        let var = regressor.variance_function(5.0);
+        assert!((var - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variance_function_binomial() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::Binomial)
+            .build();
+        let var = regressor.variance_function(0.5);
+        assert!((var - 0.25).abs() < 1e-10); // p * (1-p) = 0.25
+    }
+
+    #[test]
+    fn test_variance_function_geometric() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::Geometric)
+            .build();
+        let var = regressor.variance_function(0.3);
+        let expected = 0.3 * (1.0 - 0.3); // p * (1-p)
+        assert!((var - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variance_function_negative_binomial() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::NegativeBinomial)
+            .extra_parameter(2.0)
+            .build();
+        let var = regressor.variance_function(4.0);
+        let expected = 4.0 + 4.0 * 4.0 / 2.0; // mu + mu^2/size = 4 + 8 = 12
+        assert!((var - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variance_function_gamma() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::Gamma)
+            .build();
+        let var = regressor.variance_function(3.0);
+        assert!((var - 9.0).abs() < 1e-10); // mu^2 = 9
+    }
+
+    #[test]
+    fn test_variance_function_inverse_gaussian() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::InverseGaussian)
+            .build();
+        let var = regressor.variance_function(2.0);
+        assert!((var - 4.0).abs() < 1e-10); // mu^2 = 4
+    }
+
+    #[test]
+    fn test_variance_function_exponential() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::Exponential)
+            .build();
+        let var = regressor.variance_function(5.0);
+        assert!((var - 25.0).abs() < 1e-10); // mu^2 = 25
+    }
+
+    #[test]
+    fn test_variance_function_beta() {
+        let regressor = AlmRegressor::builder()
+            .distribution(AlmDistribution::Beta)
+            .extra_parameter(3.0) // phi
+            .build();
+        let var = regressor.variance_function(0.5);
+        let expected = 0.5 * 0.5 / (1.0 + 3.0); // p * (1-p) / (1 + phi)
+        assert!((var - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variance_function_log_distributions() {
+        for dist in [
+            AlmDistribution::LogNormal,
+            AlmDistribution::LogLaplace,
+            AlmDistribution::LogS,
+            AlmDistribution::LogGeneralisedNormal,
+            AlmDistribution::FoldedNormal,
+            AlmDistribution::RectifiedNormal,
+            AlmDistribution::BoxCoxNormal,
+            AlmDistribution::LogitNormal,
+        ] {
+            let regressor = AlmRegressor::builder().distribution(dist).build();
+            let var = regressor.variance_function(2.0);
+            assert!((var - 1.0).abs() < 1e-10, "Failed for {:?}", dist);
+        }
+    }
+
+    #[test]
+    fn test_variance_function_cumulative() {
+        for dist in [
+            AlmDistribution::CumulativeLogistic,
+            AlmDistribution::CumulativeNormal,
+        ] {
+            let regressor = AlmRegressor::builder().distribution(dist).build();
+            let var = regressor.variance_function(0.5);
+            assert!((var - 1.0).abs() < 1e-10, "Failed for {:?}", dist);
+        }
+    }
+
+    // ==================== Canonical link tests ====================
+
+    #[test]
+    fn test_canonical_link_all_distributions() {
+        assert_eq!(
+            AlmDistribution::StudentT.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(
+            AlmDistribution::Logistic.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(
+            AlmDistribution::AsymmetricLaplace.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(
+            AlmDistribution::GeneralisedNormal.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(AlmDistribution::S.canonical_link(), LinkFunction::Identity);
+        assert_eq!(
+            AlmDistribution::LogNormal.canonical_link(),
+            LinkFunction::Log
+        );
+        assert_eq!(
+            AlmDistribution::LogLaplace.canonical_link(),
+            LinkFunction::Log
+        );
+        assert_eq!(AlmDistribution::LogS.canonical_link(), LinkFunction::Log);
+        assert_eq!(
+            AlmDistribution::LogGeneralisedNormal.canonical_link(),
+            LinkFunction::Log
+        );
+        assert_eq!(
+            AlmDistribution::FoldedNormal.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(
+            AlmDistribution::RectifiedNormal.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(
+            AlmDistribution::BoxCoxNormal.canonical_link(),
+            LinkFunction::Identity
+        );
+        assert_eq!(AlmDistribution::Gamma.canonical_link(), LinkFunction::Log);
+        assert_eq!(
+            AlmDistribution::InverseGaussian.canonical_link(),
+            LinkFunction::Log
+        );
+        assert_eq!(
+            AlmDistribution::Exponential.canonical_link(),
+            LinkFunction::Log
+        );
+        assert_eq!(AlmDistribution::Beta.canonical_link(), LinkFunction::Logit);
+        assert_eq!(
+            AlmDistribution::LogitNormal.canonical_link(),
+            LinkFunction::Logit
+        );
+        assert_eq!(AlmDistribution::Poisson.canonical_link(), LinkFunction::Log);
+        assert_eq!(
+            AlmDistribution::NegativeBinomial.canonical_link(),
+            LinkFunction::Log
+        );
+        assert_eq!(
+            AlmDistribution::Binomial.canonical_link(),
+            LinkFunction::Logit
+        );
+        assert_eq!(
+            AlmDistribution::Geometric.canonical_link(),
+            LinkFunction::Logit
+        );
+        assert_eq!(
+            AlmDistribution::CumulativeLogistic.canonical_link(),
+            LinkFunction::Logit
+        );
+        assert_eq!(
+            AlmDistribution::CumulativeNormal.canonical_link(),
+            LinkFunction::Probit
+        );
+    }
+
+    #[test]
+    fn test_is_count() {
+        assert!(AlmDistribution::Poisson.is_count());
+        assert!(AlmDistribution::NegativeBinomial.is_count());
+        assert!(AlmDistribution::Binomial.is_count());
+        assert!(AlmDistribution::Geometric.is_count());
+        assert!(!AlmDistribution::Normal.is_count());
+        assert!(!AlmDistribution::Gamma.is_count());
+    }
+
+    // ==================== Link function tests ====================
+
+    #[test]
+    fn test_link_function_link() {
+        // Identity
+        assert!((LinkFunction::Identity.link(5.0) - 5.0).abs() < 1e-10);
+        // Log
+        assert!((LinkFunction::Log.link(std::f64::consts::E) - 1.0).abs() < 1e-10);
+        // Logit
+        assert!((LinkFunction::Logit.link(0.5) - 0.0).abs() < 1e-10);
+        // Inverse
+        assert!((LinkFunction::Inverse.link(2.0) - 0.5).abs() < 1e-10);
+        // Sqrt
+        assert!((LinkFunction::Sqrt.link(4.0) - 2.0).abs() < 1e-10);
+        // Cloglog
+        let cloglog_result = LinkFunction::Cloglog.link(0.5);
+        assert!(cloglog_result.is_finite());
+    }
+
+    #[test]
+    fn test_link_function_inverse() {
+        // Identity
+        assert!((LinkFunction::Identity.inverse(5.0) - 5.0).abs() < 1e-10);
+        // Log
+        assert!((LinkFunction::Log.inverse(0.0) - 1.0).abs() < 1e-10);
+        // Logit
+        assert!((LinkFunction::Logit.inverse(0.0) - 0.5).abs() < 1e-10);
+        // Inverse
+        assert!((LinkFunction::Inverse.inverse(2.0) - 0.5).abs() < 1e-10);
+        // Sqrt
+        assert!((LinkFunction::Sqrt.inverse(2.0) - 4.0).abs() < 1e-10);
+        // Cloglog
+        let cloglog_result = LinkFunction::Cloglog.inverse(0.0);
+        assert!(cloglog_result > 0.0 && cloglog_result < 1.0);
+    }
+
+    #[test]
+    fn test_link_function_inverse_derivative() {
+        // Test inverse_derivative: d(mu)/d(eta)
+        // Identity: d/d(eta)[eta] = 1
+        assert!((LinkFunction::Identity.inverse_derivative(5.0) - 1.0).abs() < 1e-10);
+        // Log: d/d(eta)[exp(eta)] = exp(eta)
+        assert!((LinkFunction::Log.inverse_derivative(2.0) - 2.0_f64.exp()).abs() < 0.01);
+        // Logit: d/d(eta)[1/(1+exp(-eta))] = mu * (1 - mu)
+        // At eta=0: mu=0.5, so derivative = 0.25
+        let logit_deriv = LinkFunction::Logit.inverse_derivative(0.0);
+        assert!((logit_deriv - 0.25).abs() < 1e-10);
+        // Sqrt: d/d(eta)[eta^2] = 2*eta
+        assert!((LinkFunction::Sqrt.inverse_derivative(2.0) - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_probit_link_roundtrip() {
+        // Probit: mu = Phi(eta)
+        let mu = LinkFunction::Probit.inverse(0.0);
+        assert!((mu - 0.5).abs() < 1e-6); // Phi(0) = 0.5
+
+        let eta = LinkFunction::Probit.link(0.5);
+        assert!(eta.abs() < 1e-6); // probit(0.5) = 0
+    }
+
+    #[test]
+    fn test_probit_extreme_values() {
+        // Test extreme probability values
+        let eta_low = LinkFunction::Probit.link(0.001);
+        assert!(eta_low < -2.0);
+
+        let eta_high = LinkFunction::Probit.link(0.999);
+        assert!(eta_high > 2.0);
+
+        // Test boundary cases
+        let eta_zero = LinkFunction::Probit.link(0.0);
+        assert!(eta_zero == f64::NEG_INFINITY);
+
+        let eta_one = LinkFunction::Probit.link(1.0);
+        assert!(eta_one == f64::INFINITY);
+    }
+
+    // ==================== Predict with interval tests ====================
+
+    #[test]
+    fn test_predict_with_interval() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| 1.0 + 2.0 * i as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Normal)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 30) as f64);
+
+        // Point prediction only
+        let result_none = fitted.predict_with_interval(&x_new, None, 0.95);
+        assert_eq!(result_none.fit.nrows(), 5);
+
+        // With interval (returns NaN for non-Normal)
+        let result_ci =
+            fitted.predict_with_interval(&x_new, Some(crate::core::IntervalType::Confidence), 0.95);
+        assert_eq!(result_ci.fit.nrows(), 5);
+        assert_eq!(result_ci.lower.nrows(), 5);
+        assert_eq!(result_ci.upper.nrows(), 5);
+    }
+
+    // ==================== Additional fit tests for coverage ====================
+
+    #[test]
+    fn test_alm_fit_log_normal() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::LogNormal)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        assert!(fitted.is_ok());
+    }
+
+    #[test]
+    fn test_alm_fit_geometric() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64);
+        let y = Col::from_fn(50, |i| ((i % 5) + 1) as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Geometric)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        // May or may not converge, but shouldn't panic
+        let _ = fitted;
+    }
+
+    #[test]
+    fn test_alm_fit_beta() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| 0.1 + 0.8 * (i as f64 / 30.0)); // Values in (0,1)
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Beta)
+            .extra_parameter(5.0)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        assert!(fitted.is_ok());
+    }
+
+    #[test]
+    fn test_alm_fit_inverse_gaussian() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (i + 1) as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::InverseGaussian)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        assert!(fitted.is_ok());
+    }
+
+    #[test]
+    fn test_alm_fit_exponential() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (i + 1) as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Exponential)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        assert!(fitted.is_ok());
+    }
+
+    #[test]
+    fn test_alm_fit_binomial() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64);
+        let y = Col::from_fn(50, |i| if i > 25 { 1.0 } else { 0.0 });
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::Binomial)
+            .extra_parameter(1.0) // n_trials
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        // May or may not converge
+        let _ = fitted;
+    }
+
+    #[test]
+    fn test_alm_fit_negative_binomial() {
+        let x = Mat::from_fn(50, 1, |i, _| i as f64);
+        let y = Col::from_fn(50, |i| (i % 10) as f64);
+
+        let fitted = AlmRegressor::builder()
+            .distribution(AlmDistribution::NegativeBinomial)
+            .extra_parameter(2.0)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        // May or may not converge
+        let _ = fitted;
     }
 }

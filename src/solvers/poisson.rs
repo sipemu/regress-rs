@@ -534,6 +534,51 @@ impl Regressor for PoissonRegressor {
 }
 
 /// Fitted Poisson GLM model.
+///
+/// Contains the estimated coefficients and model diagnostics from fitting
+/// a Poisson regression to count data using IRLS (Iteratively Reweighted
+/// Least Squares).
+///
+/// # Available Methods
+///
+/// - [`predict`](FittedRegressor::predict) - Predict counts for new data
+/// - [`predict_count`](Self::predict_count) - Alias for predict (response scale)
+/// - [`predict_linear`](Self::predict_linear) - Predict on link scale (log by default)
+/// - [`predict_with_se`](Self::predict_with_se) - Predictions with standard errors
+/// - [`pearson_residuals`](Self::pearson_residuals) - Pearson residuals
+/// - [`deviance_residuals`](Self::deviance_residuals) - Deviance residuals
+/// - [`working_residuals`](Self::working_residuals) - Working residuals
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
+/// let y = Col::from_fn(100, |i| ((i % 10) as f64).round());
+///
+/// let fitted = PoissonRegressor::log()
+///     .with_intercept(true)
+///     .compute_inference(true)
+///     .build()
+///     .fit(&x, &y)?;
+///
+/// // Access model results
+/// let coefs = fitted.coefficients();
+/// let deviance = fitted.deviance;
+/// let dispersion = fitted.dispersion;
+///
+/// // Make predictions
+/// let counts = fitted.predict_count(&x_new);
+///
+/// // Get predictions with confidence intervals
+/// let pred = fitted.predict_with_se(
+///     &x_new,
+///     PredictionType::Response,
+///     Some(IntervalType::Confidence),
+///     0.95
+/// );
+/// ```
 #[derive(Debug, Clone)]
 pub struct FittedPoisson {
     result: RegressionResult,
@@ -753,7 +798,38 @@ impl FittedRegressor for FittedPoisson {
     }
 }
 
-/// Builder for `PoissonRegressor`.
+/// Builder for configuring a Poisson regression model.
+///
+/// Provides a fluent API for setting regression options before fitting.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Basic usage with log link
+/// let model = PoissonRegressor::log()
+///     .with_intercept(true)
+///     .build();
+///
+/// // Full configuration
+/// let model = PoissonRegressor::builder()
+///     .link(PoissonLink::Log)
+///     .with_intercept(true)
+///     .compute_inference(true)
+///     .confidence_level(0.95)
+///     .max_iterations(100)
+///     .tolerance(1e-8)
+///     .build();
+///
+/// // Rate modeling with offset (exposure)
+/// let exposure = Col::from_fn(n, |i| population[i]);
+/// let offset = Col::from_fn(n, |i| exposure[i].ln());
+///
+/// let model = PoissonRegressor::log()
+///     .offset(offset)
+///     .build();
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct PoissonRegressorBuilder {
     options_builder: RegressionOptionsBuilder,
@@ -842,7 +918,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Coefficient should be positive (higher x -> higher count)
         assert!(
@@ -869,7 +945,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.coefficients[0] > 0.0);
     }
@@ -883,7 +959,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.coefficients[0] > 0.0);
     }
@@ -896,7 +972,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let counts = fitted.predict_count(&x);
 
@@ -917,7 +993,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let pearson = fitted.pearson_residuals();
         let deviance = fitted.deviance_residuals();
@@ -937,10 +1013,10 @@ mod tests {
             .compute_inference(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.std_errors.is_some());
-        let se = fitted.result.std_errors.as_ref().unwrap();
+        let se = fitted.result.std_errors.as_ref().expect("std errors exist");
         assert!(se[0] > 0.0);
     }
 
@@ -963,7 +1039,7 @@ mod tests {
             .compute_inference(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 + 1.0));
         let pred = fitted.predict_with_se(
@@ -1002,7 +1078,7 @@ mod tests {
             .offset(offset)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Model should converge
         assert!(fitted.iterations < 100);
@@ -1019,7 +1095,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 + 1.0));
         let offset_new = Col::from_fn(5, |_| 0.5_f64.ln()); // Half exposure
@@ -1034,5 +1110,195 @@ mod tests {
                 "Offset should reduce predictions"
             );
         }
+    }
+
+    #[test]
+    fn test_new_constructor() {
+        let options = RegressionOptionsBuilder::default()
+            .with_intercept(true)
+            .build()
+            .expect("valid options");
+        let family = PoissonFamily::new(PoissonLink::Log);
+        let regressor = PoissonRegressor::new(options, family);
+
+        let (x, y) = create_poisson_data(100);
+        let fitted = regressor.fit(&x, &y).expect("model should fit");
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_builder_method() {
+        let (x, y) = create_poisson_data(100);
+
+        let fitted = PoissonRegressor::builder()
+            .link(PoissonLink::Log)
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_no_intercept() {
+        let (x, y) = create_poisson_data(100);
+
+        let fitted = PoissonRegressor::log()
+            .with_intercept(false)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.intercept.is_none());
+    }
+
+    #[test]
+    fn test_convergence_failure() {
+        let (x, y) = create_poisson_data(20);
+
+        let result = PoissonRegressor::log()
+            .with_intercept(true)
+            .max_iterations(1)
+            .tolerance(1e-20)
+            .build()
+            .fit(&x, &y);
+
+        assert!(matches!(
+            result,
+            Err(RegressionError::ConvergenceFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn test_predict_linear() {
+        let (x, y) = create_poisson_data(100);
+
+        let fitted = PoissonRegressor::log()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let pred_linear = fitted.predict_linear(&x);
+        let pred_response = fitted.predict(&x);
+
+        // Linear predictions should be log of response
+        for i in 0..10 {
+            assert!((pred_linear[i] - pred_response[i].ln()).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_link_scale() {
+        let (x, y) = create_poisson_data(100);
+
+        let fitted = PoissonRegressor::log()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| i as f64 + 1.0);
+        let pred = fitted.predict_with_se(&x_new, PredictionType::Link, None, 0.95);
+
+        // Link scale predictions should be finite
+        for i in 0..5 {
+            assert!(pred.fit[i].is_finite());
+            assert!(pred.se[i] > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_prediction_interval() {
+        let (x, y) = create_poisson_data(100);
+
+        let fitted = PoissonRegressor::log()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| i as f64 + 1.0);
+        let pred = fitted.predict_with_se(
+            &x_new,
+            PredictionType::Response,
+            Some(IntervalType::Prediction),
+            0.95,
+        );
+
+        // Prediction intervals should be wider
+        for i in 0..5 {
+            assert!(pred.lower[i] <= pred.fit[i]);
+            assert!(pred.upper[i] >= pred.fit[i]);
+        }
+    }
+
+    #[test]
+    fn test_tolerance_builder() {
+        let (x, y) = create_poisson_data(100);
+
+        let fitted = PoissonRegressor::log()
+            .with_intercept(true)
+            .tolerance(1e-4)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_confidence_level_builder() {
+        let (x, y) = create_poisson_data(100);
+
+        let fitted = PoissonRegressor::log()
+            .with_intercept(true)
+            .compute_inference(true)
+            .confidence_level(0.99)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.std_errors.is_some());
+    }
+
+    #[test]
+    fn test_identity_link() {
+        // Create data suitable for identity link (counts not too close to zero)
+        let x = Mat::from_fn(100, 1, |i, _| (i as f64) / 20.0);
+        let y = Col::from_fn(100, |i| {
+            let xi = (i as f64) / 20.0;
+            (5.0 + 2.0 * xi).round().max(1.0)
+        });
+
+        let fitted = PoissonRegressor::identity()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_sqrt_link() {
+        // Create data suitable for sqrt link
+        let x = Mat::from_fn(100, 1, |i, _| (i as f64) / 20.0);
+        let y = Col::from_fn(100, |i| {
+            let xi = (i as f64) / 20.0;
+            let sqrt_mu = 1.5 + 0.5 * xi;
+            (sqrt_mu * sqrt_mu).round().max(1.0)
+        });
+
+        let fitted = PoissonRegressor::sqrt()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.coefficients[0] > 0.0);
     }
 }

@@ -579,7 +579,49 @@ impl Regressor for TweedieRegressor {
     }
 }
 
-/// Fitted Tweedie GLM model.
+/// Fitted Tweedie GLM model for flexible variance modeling.
+///
+/// Contains the estimated coefficients and model diagnostics from fitting
+/// a Tweedie regression using IRLS. The Tweedie family unifies several
+/// common distributions through the power parameter.
+///
+/// # Power Parameter
+///
+/// The Tweedie power parameter controls the variance function `Var[Y] = phi * mu^p`:
+/// - p = 0: Normal (Gaussian)
+/// - p = 1: Poisson
+/// - 1 < p < 2: Compound Poisson-Gamma (insurance claims)
+/// - p = 2: Gamma
+/// - p = 3: Inverse Gaussian
+///
+/// # Available Methods
+///
+/// - [`predict`](FittedRegressor::predict) - Predict response values
+/// - [`predict_mu`](Self::predict_mu) - Alias for predict
+/// - [`predict_eta`](Self::predict_eta) - Predict on link scale
+/// - [`predict_with_se`](Self::predict_with_se) - Predictions with standard errors
+/// - [`pearson_residuals`](Self::pearson_residuals) - Pearson residuals
+/// - [`deviance_residuals`](Self::deviance_residuals) - Deviance residuals
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
+/// let y = Col::from_fn(100, |i| (i as f64 + 1.0).max(0.1));
+///
+/// // Gamma regression (power = 2)
+/// let fitted = TweedieRegressor::gamma()
+///     .with_intercept(true)
+///     .build()
+///     .fit(&x, &y)?;
+///
+/// // Access model results
+/// let coefs = fitted.coefficients();
+/// let deviance = fitted.deviance;
+/// let dispersion = fitted.dispersion;
+/// ```
 #[derive(Debug, Clone)]
 pub struct FittedTweedie {
     result: RegressionResult,
@@ -844,7 +886,32 @@ impl FittedRegressor for FittedTweedie {
     }
 }
 
-/// Builder for `TweedieRegressor`.
+/// Builder for configuring a Tweedie regression model.
+///
+/// Provides a fluent API for setting the power parameter and other options.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Gamma regression (most common for positive continuous)
+/// let model = TweedieRegressor::gamma()
+///     .with_intercept(true)
+///     .build();
+///
+/// // Poisson regression
+/// let model = TweedieRegressor::poisson()
+///     .with_intercept(true)
+///     .build();
+///
+/// // Custom power (e.g., compound Poisson-Gamma for insurance)
+/// let model = TweedieRegressor::builder()
+///     .power(1.5)
+///     .with_intercept(true)
+///     .compute_inference(true)
+///     .build();
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct TweedieRegressorBuilder {
     options_builder: RegressionOptionsBuilder,
@@ -954,10 +1021,10 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Should be close to true values
-        assert!((fitted.result.intercept.unwrap() - 2.0).abs() < 0.5);
+        assert!((fitted.result.intercept.expect("intercept exists") - 2.0).abs() < 0.5);
         assert!((fitted.result.coefficients[0] - 3.0).abs() < 0.1);
     }
 
@@ -974,7 +1041,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.r_squared > 0.5);
         assert!(fitted.deviance < fitted.null_deviance);
@@ -993,7 +1060,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.r_squared > 0.5);
     }
@@ -1016,7 +1083,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.iterations > 0);
         assert!(fitted.dispersion > 0.0);
@@ -1033,7 +1100,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Deviance should be less than null deviance for a good model
         assert!(
@@ -1053,7 +1120,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let x_new = Mat::from_fn(5, 1, |i, _| (i + 20) as f64);
         let pred = fitted.predict(&x_new);
@@ -1084,10 +1151,298 @@ mod tests {
             .compute_inference(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.std_errors.is_some());
-        let se = fitted.result.std_errors.as_ref().unwrap();
+        let se = fitted.result.std_errors.as_ref().expect("std errors exist");
         assert!(se[0] > 0.0);
+    }
+
+    // ==================== Additional tests for coverage ====================
+
+    #[test]
+    fn test_tweedie_new_constructor() {
+        let options = RegressionOptionsBuilder::default()
+            .build()
+            .expect("valid options");
+        let family = TweedieFamily::new(2.0, 0.0); // Gamma with log link
+        let regressor = TweedieRegressor::new(options, family);
+
+        let x = Mat::from_fn(20, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(20, |i| (i + 1) as f64);
+
+        let fitted = regressor.fit(&x, &y).expect("should fit");
+        assert!(fitted.result.coefficients.nrows() > 0);
+    }
+
+    #[test]
+    fn test_inverse_gaussian_regression() {
+        let x = Mat::from_fn(30, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(30, |i| ((i + 1) as f64).powf(1.5));
+
+        let fitted = TweedieRegressor::inverse_gaussian()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.r_squared > 0.0);
+    }
+
+    #[test]
+    fn test_fitted_family_getter() {
+        let x = Mat::from_fn(20, 1, |i, _| i as f64);
+        let y = Col::from_fn(20, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let family = fitted.family();
+        assert!((family.var_power - 2.0).abs() < 1e-10);
+        assert!((family.link_power - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_predict_eta() {
+        let x = Mat::from_fn(20, 1, |i, _| i as f64);
+        let y = Col::from_fn(20, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 20) as f64);
+        let eta = fitted.predict_eta(&x_new);
+        let mu = fitted.predict(&x_new);
+
+        // For log link: eta = log(mu)
+        for i in 0..5 {
+            assert!((eta[i] - mu[i].ln()).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_residual_methods() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp() + (i % 3) as f64 * 0.1);
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let pearson = fitted.pearson_residuals();
+        let deviance = fitted.deviance_residuals();
+        let working = fitted.working_residuals();
+
+        // All residuals should be finite
+        for i in 0..30 {
+            assert!(pearson[i].is_finite());
+            assert!(deviance[i].is_finite());
+            assert!(working[i].is_finite());
+        }
+    }
+
+    #[test]
+    fn test_predict_with_offset() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 20) as f64);
+        let offset = Col::from_fn(5, |i| (i as f64) * 0.1);
+
+        let pred_no_offset = fitted.predict(&x_new);
+        let pred_with_offset = fitted.predict_with_offset(&x_new, &offset);
+
+        // With log link, offset shifts the linear predictor
+        // mu_with_offset = exp(eta + offset) = exp(eta) * exp(offset)
+        for i in 0..5 {
+            let expected = pred_no_offset[i] * offset[i].exp();
+            assert!(
+                (pred_with_offset[i] - expected).abs() / expected < 0.01,
+                "Expected {}, got {}",
+                expected,
+                pred_with_offset[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_link_scale() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 20) as f64);
+        let result = fitted.predict_with_se(&x_new, PredictionType::Link, None, 0.95);
+
+        assert_eq!(result.fit.nrows(), 5);
+        assert_eq!(result.se.nrows(), 5);
+        for i in 0..5 {
+            assert!(result.se[i] > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_response_scale() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 20) as f64);
+        let result = fitted.predict_with_se(&x_new, PredictionType::Response, None, 0.95);
+
+        assert_eq!(result.fit.nrows(), 5);
+        for i in 0..5 {
+            assert!(result.fit[i] > 0.0); // Response predictions should be positive
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_confidence_interval() {
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 20) as f64);
+        let result = fitted.predict_with_se(
+            &x_new,
+            PredictionType::Response,
+            Some(IntervalType::Confidence),
+            0.95,
+        );
+
+        assert_eq!(result.fit.nrows(), 5);
+        assert_eq!(result.lower.nrows(), 5);
+        assert_eq!(result.upper.nrows(), 5);
+        for i in 0..5 {
+            assert!(result.lower[i] < result.fit[i]);
+            assert!(result.upper[i] > result.fit[i]);
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_no_inference() {
+        // When compute_inference=false, xtwx_inverse is None
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| (1.0 + 0.1 * i as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .compute_inference(false)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 20) as f64);
+        let result = fitted.predict_with_se(&x_new, PredictionType::Response, None, 0.95);
+
+        // Should return point predictions only
+        assert_eq!(result.fit.nrows(), 5);
+    }
+
+    #[test]
+    fn test_dimension_mismatch_error() {
+        let x = Mat::from_fn(10, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(5, |i| i as f64); // Wrong size
+
+        let result = TweedieRegressor::gamma().build().fit(&x, &y);
+
+        assert!(matches!(
+            result,
+            Err(RegressionError::DimensionMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_insufficient_observations_error() {
+        let x = Mat::from_fn(1, 2, |_, _| 1.0);
+        let y = Col::from_fn(1, |_| 1.0);
+
+        let result = TweedieRegressor::gamma().build().fit(&x, &y);
+
+        assert!(matches!(
+            result,
+            Err(RegressionError::InsufficientObservations { .. })
+        ));
+    }
+
+    #[test]
+    fn test_insufficient_observations_for_params() {
+        let x = Mat::from_fn(3, 5, |i, j| (i + j) as f64); // 3 obs, 5 features + intercept = 6 params
+        let y = Col::from_fn(3, |i| (i + 1) as f64);
+
+        let result = TweedieRegressor::gamma()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y);
+
+        assert!(matches!(
+            result,
+            Err(RegressionError::InsufficientObservations { .. })
+        ));
+    }
+
+    #[test]
+    fn test_without_intercept() {
+        let x = Mat::from_fn(30, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(30, |i| (0.1 * (i + 1) as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(false)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.intercept.is_none());
+    }
+
+    #[test]
+    fn test_predict_without_intercept() {
+        let x = Mat::from_fn(30, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(30, |i| (0.1 * (i + 1) as f64).exp());
+
+        let fitted = TweedieRegressor::gamma()
+            .with_intercept(false)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 30) as f64);
+        let pred = fitted.predict(&x_new);
+
+        for i in 0..5 {
+            assert!(pred[i] > 0.0);
+        }
     }
 }

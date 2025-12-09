@@ -583,7 +583,50 @@ impl Regressor for NegativeBinomialRegressor {
     }
 }
 
-/// Fitted Negative Binomial GLM model.
+/// Fitted Negative Binomial GLM model for overdispersed count data.
+///
+/// Contains the estimated coefficients, dispersion parameter (theta), and
+/// model diagnostics from fitting a negative binomial regression using IRLS.
+///
+/// # Overdispersion
+///
+/// The negative binomial model is used when count data exhibits overdispersion
+/// (variance greater than mean). The `theta` parameter controls the degree of
+/// overdispersion: as theta increases, the model approaches Poisson.
+///
+/// # Available Methods
+///
+/// - [`predict`](FittedRegressor::predict) - Predict counts for new data
+/// - [`predict_count`](Self::predict_count) - Alias for predict
+/// - [`predict_linear`](Self::predict_linear) - Predict on link scale (log)
+/// - [`predict_with_se`](Self::predict_with_se) - Predictions with standard errors
+/// - [`overdispersion_ratio`](Self::overdispersion_ratio) - Get Var/Mean ratio
+/// - [`pearson_residuals`](Self::pearson_residuals) - Pearson residuals
+/// - [`deviance_residuals`](Self::deviance_residuals) - Deviance residuals
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Overdispersed count data
+/// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
+/// let y = Col::from_fn(100, |i| ((i % 10) as f64 * 2.0).round());
+///
+/// let fitted = NegativeBinomialRegressor::builder()
+///     .with_intercept(true)
+///     .estimate_theta(true)
+///     .compute_inference(true)
+///     .build()
+///     .fit(&x, &y)?;
+///
+/// // Access estimated theta (dispersion parameter)
+/// println!("Theta: {}", fitted.theta);
+/// println!("Overdispersion ratio: {}", fitted.overdispersion_ratio());
+///
+/// // Make predictions
+/// let counts = fitted.predict_count(&x_new);
+/// ```
 #[derive(Debug, Clone)]
 pub struct FittedNegativeBinomial {
     result: RegressionResult,
@@ -813,7 +856,39 @@ impl FittedRegressor for FittedNegativeBinomial {
     }
 }
 
-/// Builder for `NegativeBinomialRegressor`.
+/// Builder for configuring a Negative Binomial regression model.
+///
+/// Provides a fluent API for setting regression options, including whether
+/// to estimate or fix the dispersion parameter theta.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Estimate theta automatically (default)
+/// let model = NegativeBinomialRegressor::builder()
+///     .with_intercept(true)
+///     .estimate_theta(true)
+///     .build();
+///
+/// // Use fixed theta value
+/// let model = NegativeBinomialRegressor::with_theta(2.0)
+///     .with_intercept(true)
+///     .build();
+///
+/// // Full configuration
+/// let model = NegativeBinomialRegressor::builder()
+///     .with_intercept(true)
+///     .theta(1.0)                  // Initial/fixed theta
+///     .estimate_theta(true)        // Estimate theta during fit
+///     .theta_max_iter(25)          // Max iterations for theta estimation
+///     .theta_tolerance(1e-6)       // Convergence tolerance for theta
+///     .compute_inference(true)
+///     .max_iterations(100)
+///     .tolerance(1e-8)
+///     .build();
+/// ```
 #[derive(Debug, Clone)]
 pub struct NegativeBinomialRegressorBuilder {
     options_builder: RegressionOptionsBuilder,
@@ -945,7 +1020,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Theta should remain fixed
         assert!((fitted.theta - 2.0).abs() < 1e-10);
@@ -975,7 +1050,7 @@ mod tests {
             .max_iterations(100)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Theta should have been estimated (not default 1.0)
         assert!(fitted.theta > 0.0);
@@ -992,7 +1067,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let counts = fitted.predict_count(&x);
 
@@ -1013,7 +1088,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let pearson = fitted.pearson_residuals();
         let deviance = fitted.deviance_residuals();
@@ -1033,10 +1108,10 @@ mod tests {
             .compute_inference(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.std_errors.is_some());
-        let se = fitted.result.std_errors.as_ref().unwrap();
+        let se = fitted.result.std_errors.as_ref().expect("std errors exist");
         assert!(se[0] > 0.0);
     }
 
@@ -1048,7 +1123,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let ratio = fitted.overdispersion_ratio();
 
@@ -1075,7 +1150,7 @@ mod tests {
             .compute_inference(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 + 1.0));
         let pred = fitted.predict_with_se(
@@ -1114,7 +1189,7 @@ mod tests {
             .offset(offset)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Model should converge
         assert!(fitted.iterations < 500);
@@ -1131,7 +1206,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 + 1.0));
         let offset_new = Col::from_fn(5, |_| 0.5_f64.ln()); // Half exposure
@@ -1157,7 +1232,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Overdispersion ratio should be close to 1
         let ratio = fitted.overdispersion_ratio();
@@ -1165,5 +1240,160 @@ mod tests {
             (ratio - 1.0).abs() < 0.01,
             "High theta should give ratio near 1"
         );
+    }
+
+    #[test]
+    fn test_new_constructor() {
+        let options = RegressionOptionsBuilder::default()
+            .with_intercept(true)
+            .build()
+            .expect("valid options");
+        let family = NegativeBinomialFamily::new(1.0);
+        let regressor = NegativeBinomialRegressor::new(options, family);
+
+        let (x, y) = create_overdispersed_data(100);
+        let fitted = regressor.fit(&x, &y).expect("model should fit");
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_no_intercept() {
+        let (x, y) = create_overdispersed_data(100);
+
+        let fitted = NegativeBinomialRegressor::builder()
+            .with_intercept(false)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.intercept.is_none());
+    }
+
+    #[test]
+    fn test_convergence_failure() {
+        let (x, y) = create_overdispersed_data(20);
+
+        let result = NegativeBinomialRegressor::builder()
+            .with_intercept(true)
+            .max_iterations(1)
+            .tolerance(1e-20)
+            .build()
+            .fit(&x, &y);
+
+        assert!(matches!(
+            result,
+            Err(RegressionError::ConvergenceFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn test_predict_linear() {
+        let (x, y) = create_overdispersed_data(100);
+
+        let fitted = NegativeBinomialRegressor::builder()
+            .with_intercept(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let pred_linear = fitted.predict_linear(&x);
+        let pred_response = fitted.predict(&x);
+
+        // Linear predictions should be log of response
+        for i in 0..10 {
+            assert!((pred_linear[i] - pred_response[i].ln()).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_link_scale() {
+        let (x, y) = create_overdispersed_data(100);
+
+        let fitted = NegativeBinomialRegressor::builder()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| i as f64 + 1.0);
+        let pred = fitted.predict_with_se(&x_new, PredictionType::Link, None, 0.95);
+
+        // Link scale predictions should be finite
+        for i in 0..5 {
+            assert!(pred.fit[i].is_finite());
+            assert!(pred.se[i] > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_predict_with_se_prediction_interval() {
+        let (x, y) = create_overdispersed_data(100);
+
+        let fitted = NegativeBinomialRegressor::builder()
+            .with_intercept(true)
+            .compute_inference(true)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| i as f64 + 1.0);
+        let pred = fitted.predict_with_se(
+            &x_new,
+            PredictionType::Response,
+            Some(IntervalType::Prediction),
+            0.95,
+        );
+
+        // Prediction intervals should be wider
+        for i in 0..5 {
+            assert!(pred.lower[i] <= pred.fit[i]);
+            assert!(pred.upper[i] >= pred.fit[i]);
+        }
+    }
+
+    #[test]
+    fn test_tolerance_builder() {
+        let (x, y) = create_overdispersed_data(100);
+
+        let fitted = NegativeBinomialRegressor::builder()
+            .with_intercept(true)
+            .tolerance(1e-4)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.coefficients[0] > 0.0);
+    }
+
+    #[test]
+    fn test_confidence_level_builder() {
+        let (x, y) = create_overdispersed_data(100);
+
+        let fitted = NegativeBinomialRegressor::builder()
+            .with_intercept(true)
+            .compute_inference(true)
+            .confidence_level(0.99)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.result.std_errors.is_some());
+    }
+
+    #[test]
+    fn test_theta_estimation_settings() {
+        let (x, y) = create_overdispersed_data(100);
+
+        let fitted = NegativeBinomialRegressor::builder()
+            .with_intercept(true)
+            .estimate_theta(true)
+            .theta_max_iter(10)
+            .theta_tolerance(1e-4)
+            .build()
+            .fit(&x, &y)
+            .expect("model should fit");
+
+        assert!(fitted.theta > 0.0);
     }
 }

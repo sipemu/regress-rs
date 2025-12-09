@@ -465,7 +465,7 @@ impl OlsRegressor {
                     result.conf_interval_upper = Some(ci_upper);
 
                     // Intercept inference
-                    let intercept = result.intercept.unwrap();
+                    let intercept = result.intercept.expect("intercept was computed");
                     let t_int = if se_int > 0.0 {
                         intercept / se_int
                     } else {
@@ -669,10 +669,10 @@ mod tests {
         let y = Col::from_fn(5, |i| 2.0 + 3.0 * i as f64);
 
         let model = OlsRegressor::builder().with_intercept(true).build();
-        let fitted = model.fit(&x, &y).unwrap();
+        let fitted = model.fit(&x, &y).expect("model should fit");
 
         assert!((fitted.coefficients()[0] - 3.0).abs() < 1e-10);
-        assert!((fitted.intercept().unwrap() - 2.0).abs() < 1e-10);
+        assert!((fitted.intercept().expect("intercept exists") - 2.0).abs() < 1e-10);
     }
 
     #[test]
@@ -681,7 +681,7 @@ mod tests {
         let y = Col::from_fn(5, |i| 2.0 + 3.0 * i as f64);
 
         let model = OlsRegressor::builder().with_intercept(true).build();
-        let fitted = model.fit(&x, &y).unwrap();
+        let fitted = model.fit(&x, &y).expect("model should fit");
 
         let x_new = Mat::from_fn(2, 1, |i, _| (i + 10) as f64);
         let preds = fitted.predict(&x_new);

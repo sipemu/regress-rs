@@ -2,6 +2,74 @@
 
 use faer::{Col, Mat};
 
+/// Build design matrix, optionally prepending an intercept column.
+fn build_design_matrix(x: &Mat<f64>, with_intercept: bool) -> Mat<f64> {
+    let n = x.nrows();
+    let p = x.ncols();
+
+    if with_intercept {
+        Mat::from_fn(n, p + 1, |i, j| if j == 0 { 1.0 } else { x[(i, j - 1)] })
+    } else {
+        x.to_owned()
+    }
+}
+
+/// Compute X'X (cross-product matrix).
+fn compute_xtx(design: &Mat<f64>) -> Mat<f64> {
+    design.transpose() * design
+}
+
+/// Compute (X'X)^(-1) using QR decomposition with back-substitution.
+fn compute_xtx_inverse(xtx: &Mat<f64>) -> Mat<f64> {
+    let p = xtx.nrows();
+    let qr = xtx.qr();
+    let q = qr.compute_Q();
+    let r = qr.R().to_owned();
+    let qt = q.transpose().to_owned();
+
+    // Solve for each column of the inverse
+    let mut inv = Mat::zeros(p, p);
+    for col in 0..p {
+        let solution = solve_triangular_column(&r, &qt, col, p);
+        for row in 0..p {
+            inv[(row, col)] = solution[row];
+        }
+    }
+    inv
+}
+
+/// Solve for a column of (X'X)^(-1) via back-substitution.
+fn solve_triangular_column(r: &Mat<f64>, qt: &Mat<f64>, col: usize, p: usize) -> Vec<f64> {
+    let mut solution = vec![0.0; p];
+
+    for i in (0..p).rev() {
+        if r[(i, i)].abs() < 1e-14 {
+            continue;
+        }
+        let mut sum = qt[(i, col)];
+        for j in (i + 1)..p {
+            sum -= r[(i, j)] * solution[j];
+        }
+        solution[i] = sum / r[(i, i)];
+    }
+
+    solution
+}
+
+/// Compute leverage value for a single observation.
+fn compute_single_leverage(design_row: &[f64], xtx_inv: &Mat<f64>) -> f64 {
+    let p = design_row.len();
+    let mut h_ii = 0.0;
+
+    for j in 0..p {
+        for k in 0..p {
+            h_ii += design_row[j] * xtx_inv[(j, k)] * design_row[k];
+        }
+    }
+
+    h_ii.clamp(0.0, 1.0)
+}
+
 /// Compute leverage values (diagonal of hat matrix H = X(X'X)^(-1)X').
 ///
 /// Leverage measures the influence of each observation on its own fitted value.
@@ -13,71 +81,16 @@ use faer::{Col, Mat};
 /// - Points with h_ii > 2p/n are considered high leverage
 pub fn compute_leverage(x: &Mat<f64>, with_intercept: bool) -> Col<f64> {
     let n = x.nrows();
-    let p_orig = x.ncols();
+    let design = build_design_matrix(x, with_intercept);
+    let p = design.ncols();
 
-    // Build design matrix with intercept if needed
-    let (design, p) = if with_intercept {
-        let mut design = Mat::zeros(n, p_orig + 1);
-        for i in 0..n {
-            design[(i, 0)] = 1.0;
-            for j in 0..p_orig {
-                design[(i, j + 1)] = x[(i, j)];
-            }
-        }
-        (design, p_orig + 1)
-    } else {
-        (x.to_owned(), p_orig)
-    };
+    let xtx = compute_xtx(&design);
+    let xtx_inv = compute_xtx_inverse(&xtx);
 
-    // Compute X'X
-    let mut xtx: Mat<f64> = Mat::zeros(p, p);
-    for i in 0..n {
-        for j in 0..p {
-            for k in 0..p {
-                xtx[(j, k)] += design[(i, j)] * design[(i, k)];
-            }
-        }
-    }
-
-    // Compute (X'X)^(-1) using QR decomposition
-    let qr = xtx.qr();
-    let q = qr.compute_Q();
-    let r = qr.R();
-
-    let mut xtx_inv: Mat<f64> = Mat::zeros(p, p);
-    let qt = q.transpose();
-
-    for col in 0..p {
-        for i in (0..p).rev() {
-            if r[(i, i)].abs() < 1e-14 {
-                continue;
-            }
-            let mut sum = qt[(i, col)];
-            for j in (i + 1)..p {
-                sum -= r[(i, j)] * xtx_inv[(j, col)];
-            }
-            xtx_inv[(i, col)] = sum / r[(i, i)];
-        }
-    }
-
-    // Compute leverage: h_ii = x_i' (X'X)^(-1) x_i
-    let mut leverage = Col::zeros(n);
-
-    for i in 0..n {
-        let mut h_ii = 0.0;
-
-        // Compute x_i' * (X'X)^(-1) * x_i
-        for j in 0..p {
-            for k in 0..p {
-                h_ii += design[(i, j)] * xtx_inv[(j, k)] * design[(i, k)];
-            }
-        }
-
-        // Clamp to [0, 1] for numerical stability
-        leverage[i] = h_ii.clamp(0.0, 1.0);
-    }
-
-    leverage
+    Col::from_fn(n, |i| {
+        let row: Vec<f64> = (0..p).map(|j| design[(i, j)]).collect();
+        compute_single_leverage(&row, &xtx_inv)
+    })
 }
 
 /// Identify high leverage points.

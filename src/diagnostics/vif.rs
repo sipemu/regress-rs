@@ -24,50 +24,87 @@ pub fn variance_inflation_factor(x: &Mat<f64>) -> Col<f64> {
     let p = x.ncols();
 
     if n < 3 || p < 2 {
-        // Can't compute VIF with fewer than 2 predictors
         return Col::from_fn(p, |_| 1.0);
     }
 
-    let mut vif = Col::zeros(p);
+    Col::from_fn(p, |j| compute_single_vif(x, j))
+}
 
-    for j in 0..p {
-        // Build design matrix with all predictors except j
-        let mut x_other: Mat<f64> = Mat::zeros(n, p - 1);
-        let mut col_idx = 0;
-        for k in 0..p {
-            if k != j {
-                for i in 0..n {
-                    x_other[(i, col_idx)] = x[(i, k)];
-                }
-                col_idx += 1;
-            }
-        }
+/// Compute VIF for a single predictor column.
+fn compute_single_vif(x: &Mat<f64>, j: usize) -> f64 {
+    let x_other = build_other_predictors_matrix(x, j);
+    let y_j = extract_predictor_column(x, j);
 
-        // Response is predictor j
-        let y_j = Col::from_fn(n, |i| x[(i, j)]);
+    let model = OlsRegressor::builder().with_intercept(true).build();
+    model
+        .fit(&x_other, &y_j)
+        .map(|fitted| r_squared_to_vif(fitted.r_squared()))
+        .unwrap_or(1.0)
+}
 
-        // Regress x_j on other predictors
-        let model = OlsRegressor::builder().with_intercept(true).build();
+/// Build a matrix with all predictor columns except the specified one.
+fn build_other_predictors_matrix(x: &Mat<f64>, exclude_col: usize) -> Mat<f64> {
+    let n = x.nrows();
+    let p = x.ncols();
 
-        match model.fit(&x_other, &y_j) {
-            Ok(fitted) => {
-                let r_squared = fitted.r_squared();
-                // VIF = 1 / (1 - R²)
-                let vif_j = if r_squared < 1.0 - 1e-14 {
-                    1.0 / (1.0 - r_squared)
-                } else {
-                    f64::INFINITY
-                };
-                vif[j] = vif_j.max(1.0); // VIF is always >= 1
-            }
-            Err(_) => {
-                // If regression fails, assume no collinearity
-                vif[j] = 1.0;
-            }
-        }
+    Mat::from_fn(n, p - 1, |i, out_col| {
+        let src_col = if out_col < exclude_col {
+            out_col
+        } else {
+            out_col + 1
+        };
+        x[(i, src_col)]
+    })
+}
+
+/// Extract a single predictor column as the response vector.
+fn extract_predictor_column(x: &Mat<f64>, j: usize) -> Col<f64> {
+    Col::from_fn(x.nrows(), |i| x[(i, j)])
+}
+
+/// Extract a subset of columns from a matrix.
+fn extract_columns(x: &Mat<f64>, start: usize, count: usize) -> Mat<f64> {
+    let n = x.nrows();
+    Mat::from_fn(n, count, |i, j| x[(i, start + j)])
+}
+
+/// Extract all columns except a specified range.
+fn extract_other_columns(x: &Mat<f64>, exclude_start: usize, exclude_count: usize) -> Mat<f64> {
+    let n = x.nrows();
+    let p = x.ncols();
+    let other_size = p - exclude_count;
+
+    Mat::from_fn(n, other_size, |i, out_col| {
+        let src_col = if out_col < exclude_start {
+            out_col
+        } else {
+            out_col + exclude_count
+        };
+        x[(i, src_col)]
+    })
+}
+
+/// Compute max R² for a group of columns regressed on other predictors.
+fn compute_group_r_squared(x_group: &Mat<f64>, x_other: &Mat<f64>) -> f64 {
+    let n = x_group.nrows();
+    let size = x_group.ncols();
+    let model = OlsRegressor::builder().with_intercept(true).build();
+
+    (0..size)
+        .filter_map(|j| {
+            let y_j = Col::from_fn(n, |i| x_group[(i, j)]);
+            model.fit(x_other, &y_j).ok().map(|f| f.r_squared())
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+/// Convert R² to VIF value.
+fn r_squared_to_vif(r_squared: f64) -> f64 {
+    if r_squared < 1.0 - 1e-14 {
+        (1.0 / (1.0 - r_squared)).max(1.0)
+    } else {
+        f64::INFINITY
     }
-
-    vif
 }
 
 /// Compute generalized VIF (GVIF) for categorical predictors.
@@ -75,12 +112,10 @@ pub fn variance_inflation_factor(x: &Mat<f64>) -> Col<f64> {
 /// For a predictor that spans multiple columns (dummy variables),
 /// GVIF^(1/(2*df)) is comparable to regular VIF.
 pub fn generalized_vif(x: &Mat<f64>, group_sizes: &[usize]) -> Vec<f64> {
-    let n = x.nrows();
     let p = x.ncols();
 
     // Verify group sizes sum to p
-    let total: usize = group_sizes.iter().sum();
-    if total != p {
+    if group_sizes.iter().sum::<usize>() != p {
         return vec![1.0; group_sizes.len()];
     }
 
@@ -88,70 +123,39 @@ pub fn generalized_vif(x: &Mat<f64>, group_sizes: &[usize]) -> Vec<f64> {
     let mut start_col = 0;
 
     for &size in group_sizes {
-        if size == 0 {
-            gvif.push(1.0);
-            continue;
-        }
-
-        // For single-column predictors, use regular VIF
-        if size == 1 {
-            let vif_all = variance_inflation_factor(x);
-            gvif.push(vif_all[start_col]);
-            start_col += size;
-            continue;
-        }
-
-        // Build design matrix for this group of columns
-        let mut x_group: Mat<f64> = Mat::zeros(n, size);
-        for i in 0..n {
-            for j in 0..size {
-                x_group[(i, j)] = x[(i, start_col + j)];
-            }
-        }
-
-        // Build design matrix for all other columns
-        let other_size = p - size;
-        if other_size == 0 {
-            gvif.push(1.0);
-            start_col += size;
-            continue;
-        }
-
-        let mut x_other: Mat<f64> = Mat::zeros(n, other_size);
-        let mut col_idx = 0;
-        for k in 0..p {
-            if k < start_col || k >= start_col + size {
-                for i in 0..n {
-                    x_other[(i, col_idx)] = x[(i, k)];
-                }
-                col_idx += 1;
-            }
-        }
-
-        // Compute R² for each column in group using other predictors
-        let mut r_squared_group: f64 = 0.0;
-        let model = OlsRegressor::builder().with_intercept(true).build();
-
-        for j in 0..size {
-            let y_j = Col::from_fn(n, |i| x_group[(i, j)]);
-
-            if let Ok(fitted) = model.fit(&x_other, &y_j) {
-                r_squared_group = r_squared_group.max(fitted.r_squared());
-            }
-        }
-
-        // GVIF approximation
-        let gvif_val = if r_squared_group < 1.0 - 1e-14 {
-            1.0 / (1.0 - r_squared_group)
-        } else {
-            f64::INFINITY
-        };
-
-        gvif.push(gvif_val.max(1.0));
+        let result = compute_gvif_for_group(x, start_col, size);
+        gvif.push(result);
         start_col += size;
     }
 
     gvif
+}
+
+/// Compute GVIF for a single group of columns.
+fn compute_gvif_for_group(x: &Mat<f64>, start_col: usize, size: usize) -> f64 {
+    let p = x.ncols();
+
+    // Empty groups have VIF = 1
+    if size == 0 {
+        return 1.0;
+    }
+
+    // Single-column predictors use regular VIF
+    if size == 1 {
+        return variance_inflation_factor(x)[start_col];
+    }
+
+    // No other columns means no collinearity
+    let other_size = p - size;
+    if other_size == 0 {
+        return 1.0;
+    }
+
+    let x_group = extract_columns(x, start_col, size);
+    let x_other = extract_other_columns(x, start_col, size);
+    let r_squared = compute_group_r_squared(&x_group, &x_other);
+
+    r_squared_to_vif(r_squared)
 }
 
 /// Identify predictors with high multicollinearity.

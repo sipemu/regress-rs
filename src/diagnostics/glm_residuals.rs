@@ -279,4 +279,130 @@ mod tests {
             assert!((std_resid[i] - (-0.5 / scale)).abs() < 1e-10);
         }
     }
+
+    #[test]
+    fn test_standardized_deviance_residuals() {
+        let fam = TweedieFamily::gaussian();
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |i| i as f64 + 0.5);
+        let leverage = Col::from_fn(5, |_| 0.2);
+        let dispersion = 1.0;
+
+        let std_resid = standardized_deviance_residuals(&y, &mu, &fam, &leverage, dispersion);
+
+        // Check that residuals are scaled
+        let scale = (1.0 * 0.8_f64).sqrt();
+        for i in 0..5 {
+            assert!((std_resid[i] - (-0.5 / scale)).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_estimate_dispersion_deviance() {
+        let fam = TweedieFamily::gaussian();
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mu = vec![1.2, 2.1, 2.9, 4.0, 5.1];
+
+        let phi = estimate_dispersion_deviance(&y, &mu, &fam, 2);
+        // Should be positive
+        assert!(phi > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_dispersion_insufficient_data() {
+        let fam = TweedieFamily::gaussian();
+        let y = vec![1.0, 2.0];
+        let mu = vec![1.0, 2.0];
+
+        // n <= n_params should return 1.0
+        let phi_pearson = estimate_dispersion_pearson(&y, &mu, &fam, 3);
+        assert!((phi_pearson - 1.0).abs() < 1e-10);
+
+        let phi_deviance = estimate_dispersion_deviance(&y, &mu, &fam, 3);
+        assert!((phi_deviance - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pearson_residuals_near_zero_variance() {
+        // Use a family where we can get very small variance
+        // For Gaussian, V(mu) = 1, so we can't test this branch easily
+        // For Poisson, V(mu) = mu, so small mu gives small variance
+        // The code returns 0.0 when variance < 1e-14
+        use crate::core::{PoissonFamily, PoissonLink};
+        let fam = PoissonFamily::new(PoissonLink::Log);
+        let y = Col::from_fn(5, |_| 0.0);
+        let mu = Col::from_fn(5, |_| 1e-16); // Very small mu, variance = mu < 1e-14
+
+        let resid = pearson_residuals(&y, &mu, &fam);
+
+        // With variance < 1e-14, should return 0.0
+        for i in 0..5 {
+            assert!(
+                (resid[i] - 0.0).abs() < 1e-10,
+                "Expected 0.0, got {}",
+                resid[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_pearson_chi_squared_near_zero_variance() {
+        use crate::core::{PoissonFamily, PoissonLink};
+        let fam = PoissonFamily::new(PoissonLink::Log);
+        let y = vec![0.0, 0.0, 0.0];
+        let mu = vec![1e-16, 1e-16, 1e-16]; // Very small variance < 1e-14
+
+        let chi_sq = pearson_chi_squared(&y, &mu, &fam);
+        // Should handle near-zero variance gracefully (returns 0.0 for each term)
+        assert!(chi_sq.is_finite());
+        assert!((chi_sq - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_standardized_deviance_residuals_high_leverage() {
+        let fam = TweedieFamily::gaussian();
+        let y = Col::from_fn(5, |i| i as f64);
+        let mu = Col::from_fn(5, |i| i as f64 + 0.5);
+        // High leverage (close to 1.0 - scale will be clamped)
+        let leverage = Col::from_fn(5, |_| 0.99);
+        let dispersion = 1.0;
+
+        let std_resid = standardized_deviance_residuals(&y, &mu, &fam, &leverage, dispersion);
+
+        // Residuals should be finite and large due to small scale
+        for i in 0..5 {
+            assert!(std_resid[i].is_finite());
+        }
+    }
+
+    #[test]
+    fn test_deviance_residuals_binomial() {
+        let fam = BinomialFamily::logistic();
+        let y = Col::from_fn(4, |i| if i < 2 { 0.0 } else { 1.0 });
+        let mu = Col::from_fn(4, |_| 0.5);
+
+        let resid = deviance_residuals(&y, &mu, &fam);
+
+        // All residuals should be finite
+        for i in 0..4 {
+            assert!(resid[i].is_finite());
+        }
+        // Sign should match y - mu
+        assert!(resid[0] < 0.0); // y=0, mu=0.5
+        assert!(resid[2] > 0.0); // y=1, mu=0.5
+    }
+
+    #[test]
+    fn test_working_residuals_binomial() {
+        let fam = BinomialFamily::logistic();
+        let y = Col::from_fn(4, |i| if i < 2 { 0.0 } else { 1.0 });
+        let mu = Col::from_fn(4, |_| 0.5);
+
+        let resid = working_residuals(&y, &mu, &fam);
+
+        // Working residuals should be finite
+        for i in 0..4 {
+            assert!(resid[i].is_finite());
+        }
+    }
 }

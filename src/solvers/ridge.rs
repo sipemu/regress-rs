@@ -717,7 +717,7 @@ mod tests {
             .lambda(0.01)
             .build();
 
-        let fitted = model.fit(&x, &y).unwrap();
+        let fitted = model.fit(&x, &y).expect("model should fit");
 
         assert!(fitted.r_squared() > 0.99);
     }

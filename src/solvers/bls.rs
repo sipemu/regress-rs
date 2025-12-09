@@ -442,7 +442,43 @@ impl BlsRegressor {
     }
 }
 
-/// Fitted Bounded Least Squares model.
+/// Fitted Bounded Least Squares (BLS) model with coefficient constraints.
+///
+/// Contains the estimated coefficients that satisfy the specified bounds,
+/// along with model diagnostics. Uses the Lawson-Hanson algorithm for
+/// non-negative least squares (NNLS) or bounded constraints.
+///
+/// # Constraints
+///
+/// BLS supports:
+/// - Non-negative constraints: `beta >= 0` (NNLS)
+/// - Lower bounds: `beta >= lower`
+/// - Upper bounds: `beta <= upper`
+/// - Box constraints: `lower <= beta <= upper`
+///
+/// # Available Methods
+///
+/// - [`predict`](FittedRegressor::predict) - Predict response values
+/// - [`coefficients`](FittedRegressor::coefficients) - Get bounded coefficients
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// let x = Mat::from_fn(100, 3, |i, j| (i + j) as f64 / 10.0);
+/// let y = Col::from_fn(100, |i| i as f64 + 1.0);
+///
+/// // Non-negative least squares
+/// let fitted = BlsRegressor::nnls()
+///     .build()
+///     .fit(&x, &y)?;
+///
+/// // All coefficients are >= 0
+/// for coef in fitted.coefficients().iter() {
+///     assert!(*coef >= 0.0);
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct FittedBls {
     result: RegressionResult,
@@ -538,7 +574,36 @@ fn compute_gradient(xtx: &Mat<f64>, xty: &Col<f64>, beta: &Col<f64>) -> Col<f64>
     grad
 }
 
-/// Builder for `BlsRegressor`.
+/// Builder for configuring a Bounded Least Squares model.
+///
+/// Provides a fluent API for setting coefficient bounds and constraints.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use regress_rs::prelude::*;
+///
+/// // Non-negative least squares (all coefficients >= 0)
+/// let model = BlsRegressor::nnls()
+///     .build();
+///
+/// // Custom lower bounds per coefficient
+/// let model = BlsRegressor::builder()
+///     .lower_bounds(vec![0.0, -1.0, 0.5])
+///     .build();
+///
+/// // Box constraints (lower and upper bounds)
+/// let model = BlsRegressor::builder()
+///     .lower_bounds(vec![0.0, 0.0, 0.0])
+///     .upper_bounds(vec![1.0, 1.0, 1.0])
+///     .build();
+///
+/// // Same bound for all coefficients
+/// let model = BlsRegressor::builder()
+///     .lower_bound_all(0.0)
+///     .upper_bound_all(10.0)
+///     .build();
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct BlsRegressorBuilder {
     options_builder: RegressionOptionsBuilder,
@@ -616,12 +681,12 @@ impl BlsRegressorBuilder {
         BlsRegressor {
             options: self.options_builder.build_unchecked(),
             lower_bounds: if self.lower_bound_all.is_some() {
-                Some(vec![self.lower_bound_all.unwrap()])
+                Some(vec![self.lower_bound_all.expect("lower bound was set")])
             } else {
                 lower
             },
             upper_bounds: if self.upper_bound_all.is_some() {
-                Some(vec![self.upper_bound_all.unwrap()])
+                Some(vec![self.upper_bound_all.expect("upper bound was set")])
             } else {
                 upper
             },
@@ -727,7 +792,10 @@ mod tests {
         let x = Mat::from_fn(5, 2, |i, _| (i + 1) as f64);
         let y = Col::from_fn(5, |i| (2 * i + 3) as f64);
 
-        let fitted = BlsRegressor::nnls().build().fit_internal(&x, &y).unwrap();
+        let fitted = BlsRegressor::nnls()
+            .build()
+            .fit_internal(&x, &y)
+            .expect("model should fit");
 
         // All coefficients should be non-negative
         for i in 0..fitted.result.coefficients.nrows() {
@@ -751,7 +819,7 @@ mod tests {
             .with_intercept(false)
             .build()
             .fit_internal(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Check bounds
         assert!(fitted.result.coefficients[0] >= -1e-10);
@@ -770,7 +838,7 @@ mod tests {
             .with_intercept(false)
             .build()
             .fit_internal(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         // Should have reasonable R²
         assert!(bls_fitted.result.r_squared > 0.5);
@@ -785,7 +853,7 @@ mod tests {
             .with_intercept(true)
             .build()
             .fit_internal(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         assert!(fitted.result.intercept.is_some());
         // Coefficient should be non-negative
@@ -803,7 +871,7 @@ mod tests {
             .with_intercept(false)
             .build()
             .fit_internal(&x, &y)
-            .unwrap();
+            .expect("model should fit");
 
         for i in 0..3 {
             assert!(
@@ -817,5 +885,162 @@ mod tests {
                 i
             );
         }
+    }
+
+    // ==================== Additional tests for coverage ====================
+
+    #[test]
+    fn test_bls_new_constructor() {
+        let options = RegressionOptionsBuilder::default()
+            .build()
+            .expect("valid options");
+        let lower = Some(vec![0.0, 0.0]);
+        let upper = Some(vec![10.0, 10.0]);
+        let regressor = BlsRegressor::new(options, lower, upper);
+
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| i as f64);
+
+        let fitted = regressor.fit_internal(&x, &y).expect("should fit");
+        assert!(fitted.result.coefficients.nrows() == 2);
+    }
+
+    #[test]
+    fn test_builder_new() {
+        let builder = BlsRegressorBuilder::new();
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| i as f64);
+
+        let fitted = builder
+            .with_intercept(false)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.result.coefficients.nrows() == 2);
+    }
+
+    #[test]
+    fn test_builder_max_iterations() {
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| i as f64);
+
+        let fitted = BlsRegressor::builder()
+            .max_iterations(100)
+            .with_intercept(false)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.result.r_squared >= 0.0);
+    }
+
+    #[test]
+    fn test_builder_tolerance() {
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| i as f64);
+
+        let fitted = BlsRegressor::builder()
+            .tolerance(1e-8)
+            .with_intercept(false)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        assert!(fitted.result.r_squared >= 0.0);
+    }
+
+    #[test]
+    fn test_predict_method() {
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| 1.0 + 0.5 * i as f64);
+
+        let fitted = BlsRegressor::nnls()
+            .with_intercept(true)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        let x_new = Mat::from_fn(5, 2, |i, j| ((i + 20) + j) as f64);
+        let predictions = fitted.predict(&x_new);
+
+        assert_eq!(predictions.nrows(), 5);
+        for i in 0..5 {
+            assert!(predictions[i].is_finite());
+        }
+    }
+
+    #[test]
+    fn test_result_method() {
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| 1.0 + 0.5 * i as f64);
+
+        let fitted = BlsRegressor::nnls()
+            .with_intercept(true)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        let result = fitted.result();
+        assert!(result.coefficients.nrows() == 2);
+        assert!(result.r_squared >= 0.0);
+    }
+
+    #[test]
+    fn test_predict_with_interval_none() {
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| 1.0 + 0.5 * i as f64);
+
+        let fitted = BlsRegressor::nnls()
+            .with_intercept(true)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        let x_new = Mat::from_fn(5, 2, |i, j| ((i + 20) + j) as f64);
+        let result = fitted.predict_with_interval(&x_new, None, 0.95);
+
+        assert_eq!(result.fit.nrows(), 5);
+    }
+
+    #[test]
+    fn test_predict_with_interval_confidence() {
+        let x = Mat::from_fn(20, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(20, |i| 1.0 + 0.5 * i as f64);
+
+        let fitted = BlsRegressor::nnls()
+            .with_intercept(true)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        let x_new = Mat::from_fn(5, 2, |i, j| ((i + 20) + j) as f64);
+        let result = fitted.predict_with_interval(&x_new, Some(IntervalType::Confidence), 0.95);
+
+        assert_eq!(result.fit.nrows(), 5);
+        assert_eq!(result.lower.nrows(), 5);
+        assert_eq!(result.upper.nrows(), 5);
+        // Intervals should be NaN for BLS
+        for i in 0..5 {
+            assert!(result.lower[i].is_nan());
+            assert!(result.upper[i].is_nan());
+        }
+    }
+
+    #[test]
+    fn test_predict_without_intercept() {
+        let x = Mat::from_fn(20, 2, |i, j| ((i + 1) * (j + 1)) as f64);
+        let y = Col::from_fn(20, |i| 0.5 * (i + 1) as f64);
+
+        let fitted = BlsRegressor::nnls()
+            .with_intercept(false)
+            .build()
+            .fit_internal(&x, &y)
+            .expect("should fit");
+
+        let x_new = Mat::from_fn(5, 2, |i, j| ((i + 20) * (j + 1)) as f64);
+        let predictions = fitted.predict(&x_new);
+
+        assert_eq!(predictions.nrows(), 5);
     }
 }

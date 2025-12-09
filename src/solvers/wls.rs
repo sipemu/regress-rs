@@ -616,7 +616,7 @@ impl WlsRegressor {
                     result.conf_interval_upper = Some(ci_upper);
 
                     // Intercept inference
-                    let intercept = result.intercept.unwrap();
+                    let intercept = result.intercept.expect("intercept was computed");
                     let t_int = if se_int > 0.0 {
                         intercept / se_int
                     } else {
@@ -866,11 +866,16 @@ mod tests {
             .build();
         let ols = OlsRegressor::builder().with_intercept(true).build();
 
-        let wls_fit = wls.fit(&x, &y).unwrap();
-        let ols_fit = ols.fit(&x, &y).unwrap();
+        let wls_fit = wls.fit(&x, &y).expect("WLS model should fit");
+        let ols_fit = ols.fit(&x, &y).expect("OLS model should fit");
 
         assert!((wls_fit.coefficients()[0] - ols_fit.coefficients()[0]).abs() < 1e-10);
-        assert!((wls_fit.intercept().unwrap() - ols_fit.intercept().unwrap()).abs() < 1e-10);
+        assert!(
+            (wls_fit.intercept().expect("intercept exists")
+                - ols_fit.intercept().expect("intercept exists"))
+            .abs()
+                < 1e-10
+        );
     }
 
     #[test]
@@ -884,7 +889,7 @@ mod tests {
             .weights(weights)
             .build();
 
-        let fitted = model.fit(&x, &y).unwrap();
+        let fitted = model.fit(&x, &y).expect("model should fit");
 
         assert!(fitted.r_squared() > 0.9);
     }

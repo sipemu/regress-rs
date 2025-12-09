@@ -392,4 +392,173 @@ mod tests {
         // ESS = TSS - RSS
         assert!((ess - (tss - rss)).abs() < 1e-10);
     }
+
+    #[test]
+    fn test_residuals_expanded_with_na() {
+        use super::super::na_action::{NaAction, NaInfo};
+
+        let mut result = RegressionResult::empty(2, 3);
+        // Original 5 rows, rows 2 and 3 were removed
+        result.residuals = Col::from_fn(3, |i| (i + 1) as f64); // [1.0, 2.0, 3.0]
+
+        let na_info = NaInfo {
+            n_original: 5,
+            n_clean: 3,
+            na_mask: vec![false, false, true, true, false],
+            kept_indices: vec![0, 1, 4],
+            n_removed: 2,
+            action: NaAction::Exclude,
+        };
+        result.na_info = Some(na_info);
+
+        let expanded = result.residuals_expanded();
+        assert_eq!(expanded.nrows(), 5);
+        assert!((expanded[0] - 1.0).abs() < 1e-10);
+        assert!((expanded[1] - 2.0).abs() < 1e-10);
+        assert!(expanded[2].is_nan());
+        assert!(expanded[3].is_nan());
+        assert!((expanded[4] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_residuals_expanded_no_na() {
+        let mut result = RegressionResult::empty(2, 5);
+        result.residuals = Col::from_fn(5, |i| i as f64);
+        result.na_info = None;
+
+        let expanded = result.residuals_expanded();
+        assert_eq!(expanded.nrows(), 5);
+        for i in 0..5 {
+            assert!((expanded[i] - i as f64).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_fitted_expanded_with_na() {
+        use super::super::na_action::{NaAction, NaInfo};
+
+        let mut result = RegressionResult::empty(2, 3);
+        result.fitted_values = Col::from_fn(3, |i| (i * 10) as f64); // [0.0, 10.0, 20.0]
+
+        let na_info = NaInfo {
+            n_original: 5,
+            n_clean: 3,
+            na_mask: vec![false, false, true, true, false],
+            kept_indices: vec![0, 1, 4],
+            n_removed: 2,
+            action: NaAction::Exclude,
+        };
+        result.na_info = Some(na_info);
+
+        let expanded = result.fitted_expanded();
+        assert_eq!(expanded.nrows(), 5);
+        assert!((expanded[0] - 0.0).abs() < 1e-10);
+        assert!((expanded[1] - 10.0).abs() < 1e-10);
+        assert!(expanded[2].is_nan());
+        assert!(expanded[3].is_nan());
+        assert!((expanded[4] - 20.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_std_errors_expanded_with_na() {
+        use super::super::na_action::{NaAction, NaInfo};
+
+        let mut result = RegressionResult::empty(2, 3);
+        result.std_errors = Some(Col::from_fn(3, |i| 0.1 * (i + 1) as f64));
+
+        let na_info = NaInfo {
+            n_original: 5,
+            n_clean: 3,
+            na_mask: vec![false, false, true, true, false],
+            kept_indices: vec![0, 1, 4],
+            n_removed: 2,
+            action: NaAction::Exclude,
+        };
+        result.na_info = Some(na_info);
+
+        let expanded = result.std_errors_expanded();
+        assert!(expanded.is_some());
+        let expanded = expanded.unwrap();
+        assert_eq!(expanded.nrows(), 5);
+        assert!((expanded[0] - 0.1).abs() < 1e-10);
+        assert!((expanded[1] - 0.2).abs() < 1e-10);
+        assert!(expanded[2].is_nan());
+        assert!(expanded[3].is_nan());
+        assert!((expanded[4] - 0.3).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_std_errors_expanded_no_std_errors() {
+        let result = RegressionResult::empty(2, 5);
+        assert!(result.std_errors_expanded().is_none());
+    }
+
+    #[test]
+    fn test_had_na_removed() {
+        use super::super::na_action::{NaAction, NaInfo};
+
+        let mut result = RegressionResult::empty(2, 3);
+        assert!(!result.had_na_removed());
+
+        let na_info = NaInfo {
+            n_original: 5,
+            n_clean: 3,
+            na_mask: vec![false, false, true, true, false],
+            kept_indices: vec![0, 1, 4],
+            n_removed: 2,
+            action: NaAction::Exclude,
+        };
+        result.na_info = Some(na_info);
+        assert!(result.had_na_removed());
+    }
+
+    #[test]
+    fn test_n_na_removed() {
+        use super::super::na_action::{NaAction, NaInfo};
+
+        let mut result = RegressionResult::empty(2, 3);
+        assert_eq!(result.n_na_removed(), 0);
+
+        let na_info = NaInfo {
+            n_original: 5,
+            n_clean: 3,
+            na_mask: vec![false, false, true, true, false],
+            kept_indices: vec![0, 1, 4],
+            n_removed: 2,
+            action: NaAction::Exclude,
+        };
+        result.na_info = Some(na_info);
+        assert_eq!(result.n_na_removed(), 2);
+    }
+
+    #[test]
+    fn test_n_original_observations() {
+        use super::super::na_action::{NaAction, NaInfo};
+
+        let mut result = RegressionResult::empty(2, 3);
+        result.n_observations = 3;
+        assert_eq!(result.n_original_observations(), 3);
+
+        let na_info = NaInfo {
+            n_original: 5,
+            n_clean: 3,
+            na_mask: vec![false, false, true, true, false],
+            kept_indices: vec![0, 1, 4],
+            n_removed: 2,
+            action: NaAction::Exclude,
+        };
+        result.na_info = Some(na_info);
+        assert_eq!(result.n_original_observations(), 5);
+    }
+
+    #[test]
+    fn test_had_na_removed_with_no_removal() {
+        use super::super::na_action::{NaAction, NaInfo};
+
+        let mut result = RegressionResult::empty(2, 5);
+        // NaInfo with n_removed = 0
+        let na_info = NaInfo::no_na(5, NaAction::Omit);
+        result.na_info = Some(na_info);
+        assert!(!result.had_na_removed());
+    }
 }
