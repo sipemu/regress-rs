@@ -354,7 +354,7 @@ impl RlsRegressor {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
 /// let y = Col::from_fn(100, |i| i as f64 + 1.0);
@@ -548,7 +548,7 @@ impl FittedRegressor for FittedRls {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Standard RLS (all observations equally weighted)
 /// let model = RlsRegressor::builder()

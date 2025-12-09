@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use regress_rs::NegativeBinomialFamily;
+//! use anofox_regression::NegativeBinomialFamily;
 //!
 //! // Negative binomial with known theta
 //! let nb = NegativeBinomialFamily::new(2.0);

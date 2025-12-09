@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use regress_rs::solvers::{BinomialRegressor, Regressor, FittedRegressor};
+//! use anofox_regression::solvers::{BinomialRegressor, Regressor, FittedRegressor};
 //! use faer::{Mat, Col};
 //!
 //! let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64);
@@ -548,7 +548,7 @@ impl Regressor for BinomialRegressor {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Binary classification data
 /// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
@@ -806,7 +806,7 @@ impl FittedRegressor for FittedBinomial {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Logistic regression (most common)
 /// let model = BinomialRegressor::logistic()

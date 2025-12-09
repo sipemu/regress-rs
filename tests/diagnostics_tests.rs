@@ -2,13 +2,13 @@
 
 mod common;
 
-use faer::{Col, Mat};
-use regress_rs::diagnostics::{
+use anofox_regression::diagnostics::{
     compute_leverage, cooks_distance, dffits, externally_studentized_residuals, generalized_vif,
     high_leverage_points, high_vif_predictors, influential_cooks, influential_dffits,
     residual_outliers, standardized_residuals, studentized_residuals, variance_inflation_factor,
 };
-use regress_rs::solvers::{FittedRegressor, OlsRegressor, Regressor};
+use anofox_regression::solvers::{FittedRegressor, OlsRegressor, Regressor};
+use faer::{Col, Mat};
 
 // ============================================================================
 // Leverage Tests

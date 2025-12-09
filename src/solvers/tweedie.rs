@@ -31,7 +31,7 @@ use statrs::distribution::{ContinuousCDF, FisherSnedecor, Normal};
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::solvers::{TweedieRegressor, Regressor, FittedRegressor};
+/// use anofox_regression::solvers::{TweedieRegressor, Regressor, FittedRegressor};
 /// use faer::{Mat, Col};
 ///
 /// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64);
@@ -606,7 +606,7 @@ impl Regressor for TweedieRegressor {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
 /// let y = Col::from_fn(100, |i| (i as f64 + 1.0).max(0.1));
@@ -893,7 +893,7 @@ impl FittedRegressor for FittedTweedie {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Gamma regression (most common for positive continuous)
 /// let model = TweedieRegressor::gamma()

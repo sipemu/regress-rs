@@ -5,8 +5,8 @@
 //!
 //! Generated with seed 42 in R for reproducibility.
 
+use anofox_regression::solvers::{AlmDistribution, AlmRegressor, FittedRegressor, Regressor};
 use faer::{Col, Mat};
-use regress_rs::solvers::{AlmDistribution, AlmRegressor, FittedRegressor, Regressor};
 
 // Tolerance for coefficient comparisons (allow 10% relative error due to different optimizers)
 const COEF_TOL: f64 = 0.15;

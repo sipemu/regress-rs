@@ -1,15 +1,15 @@
 [package]
-name = "regress-rs"
+name = "anofox-regression"
 version = "0.3.0"
 edition = "2021"
 description = "A robust statistics library for regression analysis"
 license = "MIT"
 authors = ["Simon M"]
-repository = "https://github.com/sipemu/regress-rs"
+repository = "https://github.com/sipemu/anofox-regression"
 readme = "README.md"
 keywords = ["statistics", "regression", "linear-regression", "inference"]
 categories = ["science", "algorithms"]
-documentation = "https://docs.rs/regress-rs"
+documentation = "https://docs.rs/anofox-regression"
 
 [dependencies]
 faer = "0.23"

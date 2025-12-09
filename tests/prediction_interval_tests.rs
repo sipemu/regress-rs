@@ -2,8 +2,8 @@
 
 mod common;
 
+use anofox_regression::prelude::*;
 use faer::{Col, Mat};
-use regress_rs::prelude::*;
 
 /// Helper to assert approximate equality with a tolerance.
 fn assert_approx(actual: f64, expected: f64, tol: f64, name: &str) {

@@ -2,9 +2,9 @@
 
 mod common;
 
+use anofox_regression::solvers::{ElasticNetRegressor, FittedRegressor, Regressor};
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use regress_rs::solvers::{ElasticNetRegressor, FittedRegressor, Regressor};
 
 // ============================================================================
 // Basic Elastic Net Tests

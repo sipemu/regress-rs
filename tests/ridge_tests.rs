@@ -2,9 +2,9 @@
 
 mod common;
 
+use anofox_regression::solvers::{FittedRegressor, Regressor, RidgeRegressor};
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use regress_rs::solvers::{FittedRegressor, Regressor, RidgeRegressor};
 
 // ============================================================================
 // Basic Ridge Regression Tests
@@ -40,7 +40,7 @@ fn test_lambda_zero_equals_ols() {
         .lambda(0.0)
         .build();
 
-    let ols = regress_rs::solvers::OlsRegressor::builder()
+    let ols = anofox_regression::solvers::OlsRegressor::builder()
         .with_intercept(true)
         .build();
 
@@ -209,7 +209,7 @@ fn test_ridge_handles_collinearity() {
     let (x, y) = common::generate_collinear_data(20);
 
     // OLS will have aliased coefficients
-    let ols = regress_rs::solvers::OlsRegressor::builder()
+    let ols = anofox_regression::solvers::OlsRegressor::builder()
         .with_intercept(true)
         .build();
     let ols_fit = ols.fit(&x, &y).expect("ols fit should succeed");
@@ -289,7 +289,7 @@ fn test_ridge_inference() {
 
 #[test]
 fn test_ridge_prediction_intervals() {
-    use regress_rs::core::IntervalType;
+    use anofox_regression::core::IntervalType;
 
     let x = Mat::from_fn(50, 2, |i, j| ((i + j) as f64) * 0.1);
     let y = Col::from_fn(50, |i| 1.0 + 2.0 * i as f64 * 0.1);
@@ -320,7 +320,7 @@ fn test_ridge_prediction_intervals() {
 
 #[test]
 fn test_ridge_lambda_scaling_glmnet() {
-    use regress_rs::core::LambdaScaling;
+    use anofox_regression::core::LambdaScaling;
 
     let x = Mat::from_fn(50, 2, |i, j| ((i + j) as f64) * 0.1);
     let y = Col::from_fn(50, |i| 1.0 + 2.0 * i as f64 * 0.1);

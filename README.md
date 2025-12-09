@@ -1,9 +1,9 @@
-# regress-rs
+# anofox-regression
 
-[![CI](https://github.com/sipemu/regress-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/sipemu/regress-rs/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/regress-rs.svg)](https://crates.io/crates/regress-rs)
-[![Documentation](https://docs.rs/regress-rs/badge.svg)](https://docs.rs/regress-rs)
-[![codecov](https://codecov.io/gh/sipemu/regress-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/sipemu/regress-rs)
+[![CI](https://github.com/sipemu/anofox-regression/actions/workflows/ci.yml/badge.svg)](https://github.com/sipemu/anofox-regression/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/anofox-regression.svg)](https://crates.io/crates/anofox-regression)
+[![Documentation](https://docs.rs/anofox-regression/badge.svg)](https://docs.rs/anofox-regression)
+[![codecov](https://codecov.io/gh/sipemu/anofox-regression/branch/main/graph/badge.svg)](https://codecov.io/gh/sipemu/anofox-regression)
 [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 A robust statistics library for regression analysis in Rust.
@@ -52,7 +52,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-regress-rs = "0.2"
+anofox-regression = "0.2"
 ```
 
 ## Quick Start
@@ -60,7 +60,7 @@ regress-rs = "0.2"
 ### Basic OLS Regression
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 use faer::{Mat, Col};
 
 // Create sample data
@@ -86,7 +86,7 @@ let predictions = fitted.predict(&x_new);
 ### Prediction Intervals
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 let fitted = OlsRegressor::builder()
     .with_intercept(true)
@@ -115,7 +115,7 @@ let result = fitted.predict_with_interval(
 ### Weighted Least Squares
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 let weights = Col::from_fn(100, |i| 1.0 / (i + 1) as f64);
 
@@ -129,7 +129,7 @@ let fitted = model.fit(&x, &y).unwrap();
 ### Ridge Regression
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 let model = RidgeRegressor::builder()
     .with_intercept(true)
@@ -148,7 +148,7 @@ if let Some(se) = &result.std_errors {
 ### Elastic Net
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 let model = ElasticNetRegressor::builder()
     .with_intercept(true)
@@ -165,7 +165,7 @@ println!("Non-zero coefficients: {}", fitted.n_nonzero());
 ### Recursive Least Squares (Online Learning)
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 let model = RlsRegressor::builder()
     .with_intercept(true)
@@ -182,7 +182,7 @@ let prediction = fitted.update(&x_new, y_new);
 ### Bounded Least Squares (NNLS)
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 // Non-negative least squares (all coefficients >= 0)
 let model = BlsRegressor::nnls().build();
@@ -199,7 +199,7 @@ let fitted = model.fit(&x, &y).unwrap();
 ### Tweedie GLM
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 // Gamma regression with log link (insurance claims, positive continuous data)
 let model = TweedieRegressor::gamma()
@@ -226,7 +226,7 @@ let model = TweedieRegressor::builder()
 ### Poisson GLM (Count Data)
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 // Poisson regression with log link (count data)
 let model = PoissonRegressor::log()
@@ -270,7 +270,7 @@ let rates = fitted.predict_with_offset(&x_new, &new_offset);
 ### Negative Binomial GLM (Overdispersed Count Data)
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 // Negative binomial with automatic theta estimation (like MASS::glm.nb)
 let model = NegativeBinomialRegressor::builder()
@@ -306,7 +306,7 @@ let deviance = fitted.deviance_residuals();
 ### Binomial GLM (Logistic Regression)
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 // Logistic regression (binary classification)
 let model = BinomialRegressor::logistic()
@@ -350,7 +350,7 @@ let working = fitted.working_residuals();
 The ALM supports 24+ distributions for maximum likelihood regression, based on the [greybox R package](https://github.com/config-i1/greybox).
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 // Laplace (LAD) regression - robust to outliers
 let model = AlmRegressor::builder()
@@ -398,7 +398,7 @@ let model = AlmRegressor::builder()
 ### NA Handling
 
 ```rust
-use regress_rs::{NaAction, NaHandler};
+use anofox_regression::{NaAction, NaHandler};
 
 // Process data with NA values (represented as f64::NAN)
 let result = NaHandler::process(&x, &y, NaAction::Omit).unwrap();
@@ -419,7 +419,7 @@ let result = NaHandler::process(&x, &y, NaAction::Pass).unwrap();
 ### Model Diagnostics
 
 ```rust
-use regress_rs::prelude::*;
+use anofox_regression::prelude::*;
 
 let fitted = OlsRegressor::builder()
     .with_intercept(true)

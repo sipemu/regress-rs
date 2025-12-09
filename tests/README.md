@@ -1,6 +1,6 @@
 # Test Suite
 
-This directory contains comprehensive tests for the `regress-rs` statistical library.
+This directory contains comprehensive tests for the `anofox-regression` statistical library.
 
 ## Test Overview
 

@@ -4,8 +4,10 @@
 
 mod common;
 
+use anofox_regression::solvers::{
+    AlmDistribution, AlmRegressor, FittedAlm, FittedRegressor, Regressor,
+};
 use faer::{Col, Mat};
-use regress_rs::solvers::{AlmDistribution, AlmRegressor, FittedAlm, FittedRegressor, Regressor};
 
 // ============================================================================
 // Distribution Likelihood Tests
@@ -13,7 +15,7 @@ use regress_rs::solvers::{AlmDistribution, AlmRegressor, FittedAlm, FittedRegres
 
 mod likelihood_tests {
     use super::*;
-    use regress_rs::solvers::alm::{log_likelihood, AlmDistribution};
+    use anofox_regression::solvers::alm::{log_likelihood, AlmDistribution};
 
     /// Test Normal distribution log-likelihood
     /// LL = -n/2 * log(2*pi*sigma^2) - RSS/(2*sigma^2)
@@ -680,7 +682,7 @@ mod inference_tests {
 
 mod edge_cases {
     use super::*;
-    use regress_rs::solvers::RegressionError;
+    use anofox_regression::solvers::RegressionError;
 
     /// Test dimension mismatch error
     #[test]

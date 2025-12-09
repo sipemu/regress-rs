@@ -1,16 +1,16 @@
 //! R Validation Tests for GLM implementations.
 //!
-//! These tests compare regress-rs GLM implementations against R's glm() function.
+//! These tests compare anofox-regression GLM implementations against R's glm() function.
 //! Each test includes the R code used to generate reference values.
 //!
 //! To verify against R, run the R code in comments and compare outputs.
 
-use approx::assert_relative_eq;
-use faer::{Col, Mat};
-use regress_rs::solvers::{
+use anofox_regression::solvers::{
     BinomialRegressor, FittedRegressor, NegativeBinomialRegressor, PoissonRegressor, Regressor,
     TweedieRegressor,
 };
+use approx::assert_relative_eq;
+use faer::{Col, Mat};
 
 // ============================================================================
 // POISSON GLM TESTS

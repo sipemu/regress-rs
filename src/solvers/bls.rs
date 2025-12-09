@@ -26,7 +26,7 @@ use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::solvers::{BlsRegressor, Regressor, FittedRegressor};
+/// use anofox_regression::solvers::{BlsRegressor, Regressor, FittedRegressor};
 /// use faer::{Mat, Col};
 ///
 /// let x = Mat::from_fn(100, 3, |i, j| (i + j) as f64);
@@ -464,7 +464,7 @@ impl BlsRegressor {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// let x = Mat::from_fn(100, 3, |i, j| (i + j) as f64 / 10.0);
 /// let y = Col::from_fn(100, |i| i as f64 + 1.0);
@@ -581,7 +581,7 @@ fn compute_gradient(xtx: &Mat<f64>, xty: &Col<f64>, beta: &Col<f64>) -> Col<f64>
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Non-negative least squares (all coefficients >= 0)
 /// let model = BlsRegressor::nnls()

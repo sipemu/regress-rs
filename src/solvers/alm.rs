@@ -1515,7 +1515,7 @@ impl Regressor for AlmRegressor {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
 /// let y = Col::from_fn(100, |i| (i as f64 + 1.0).sin() + 1.5);
@@ -1631,7 +1631,7 @@ impl FittedRegressor for FittedAlm {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Normal distribution with identity link (standard linear model)
 /// let model = AlmRegressor::builder()

@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use regress_rs::solvers::{NegativeBinomialRegressor, Regressor, FittedRegressor};
+//! use anofox_regression::solvers::{NegativeBinomialRegressor, Regressor, FittedRegressor};
 //! use faer::{Mat, Col};
 //!
 //! let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64);
@@ -607,7 +607,7 @@ impl Regressor for NegativeBinomialRegressor {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Overdispersed count data
 /// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
@@ -864,7 +864,7 @@ impl FittedRegressor for FittedNegativeBinomial {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Estimate theta automatically (default)
 /// let model = NegativeBinomialRegressor::builder()

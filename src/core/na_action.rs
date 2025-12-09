@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```
-//! use regress_rs::core::{NaAction, NaHandler};
+//! use anofox_regression::core::{NaAction, NaHandler};
 //! use faer::{Mat, Col};
 //!
 //! let x = Mat::from_fn(5, 2, |i, j| if i == 2 { f64::NAN } else { (i + j) as f64 });

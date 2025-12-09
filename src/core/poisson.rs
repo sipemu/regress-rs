@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use regress_rs::PoissonFamily;
+//! use anofox_regression::PoissonFamily;
 //!
 //! // Poisson regression with log link (canonical, default)
 //! let poisson = PoissonFamily::log();

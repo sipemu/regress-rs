@@ -4,14 +4,14 @@
 //! that our implementations produce results consistent with established
 //! statistical software.
 
-use approx::assert_relative_eq;
-use faer::{Col, Mat};
-use regress_rs::diagnostics::{compute_leverage, cooks_distance, variance_inflation_factor};
-use regress_rs::solvers::{
+use anofox_regression::diagnostics::{compute_leverage, cooks_distance, variance_inflation_factor};
+use anofox_regression::solvers::{
     BlsRegressor, ElasticNetRegressor, FittedRegressor, NegativeBinomialRegressor, OlsRegressor,
     PoissonRegressor, Regressor, RidgeRegressor, TweedieRegressor, WlsRegressor,
 };
-use regress_rs::{NaAction, NaHandler};
+use anofox_regression::{NaAction, NaHandler};
+use approx::assert_relative_eq;
+use faer::{Col, Mat};
 
 // ============================================================================
 // Dataset 1: Simple Linear Regression (OLS)
@@ -989,7 +989,7 @@ fn test_full_workflow_matches_r() {
 
 #[test]
 fn test_ridge_lambda_scaling_glmnet() {
-    use regress_rs::LambdaScaling;
+    use anofox_regression::LambdaScaling;
 
     // Test that LambdaScaling::Glmnet multiplies lambda by n
     let (x, y) = dataset2();
@@ -1031,7 +1031,7 @@ fn test_ridge_lambda_scaling_glmnet() {
 
 #[test]
 fn test_elastic_net_lambda_scaling_glmnet() {
-    use regress_rs::LambdaScaling;
+    use anofox_regression::LambdaScaling;
 
     // Similar test for Elastic Net
     let (x, y) = dataset2();
@@ -1521,7 +1521,7 @@ fn test_tweedie_deviance_calculation() {
 // fit <- glm(y ~ x, family = binomial(link = "logit"))
 // ============================================================================
 
-use regress_rs::solvers::BinomialRegressor;
+use anofox_regression::solvers::BinomialRegressor;
 
 #[test]
 fn test_binomial_logistic_vs_r() {
@@ -1766,7 +1766,7 @@ fn test_glm_residuals_binomial() {
 // pred <- predict(fit, newdata = data.frame(x = c(1, 2, 3)), type = "response", se.fit = TRUE)
 // ============================================================================
 
-use regress_rs::core::PredictionType;
+use anofox_regression::core::PredictionType;
 
 #[test]
 fn test_tweedie_predict_with_se() {
@@ -1800,7 +1800,7 @@ fn test_tweedie_predict_with_se() {
 
 #[test]
 fn test_tweedie_predict_with_ci() {
-    use regress_rs::core::IntervalType;
+    use anofox_regression::core::IntervalType;
 
     let n = 50;
     let x = Mat::from_fn(n, 1, |i, _| (i + 1) as f64);

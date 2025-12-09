@@ -2,9 +2,9 @@
 
 mod common;
 
+use anofox_regression::solvers::{FittedRegressor, OlsRegressor, Regressor, WlsRegressor};
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use regress_rs::solvers::{FittedRegressor, OlsRegressor, Regressor, WlsRegressor};
 
 // ============================================================================
 // Basic WLS Tests
@@ -338,7 +338,7 @@ fn test_wls_weights_access() {
 
 #[test]
 fn test_wls_prediction_intervals() {
-    use regress_rs::core::IntervalType;
+    use anofox_regression::core::IntervalType;
 
     let x = Mat::from_fn(50, 2, |i, j| ((i + j) as f64) * 0.1);
     let y = Col::from_fn(50, |i| {
@@ -379,7 +379,7 @@ fn test_wls_prediction_intervals() {
 
 #[test]
 fn test_wls_confidence_intervals() {
-    use regress_rs::core::IntervalType;
+    use anofox_regression::core::IntervalType;
 
     let x = Mat::from_fn(50, 2, |i, j| ((i + j) as f64) * 0.1);
     let y = Col::from_fn(50, |i| 1.0 + 2.0 * i as f64 * 0.1);
@@ -462,7 +462,7 @@ fn test_wls_no_intercept_with_inference() {
 
 #[test]
 fn test_wls_no_intercept_prediction_intervals() {
-    use regress_rs::core::IntervalType;
+    use anofox_regression::core::IntervalType;
 
     let x = Mat::from_fn(50, 2, |i, j| ((i + j + 1) as f64) * 0.1);
     let y = Col::from_fn(50, |i| 2.0 * i as f64 * 0.1);

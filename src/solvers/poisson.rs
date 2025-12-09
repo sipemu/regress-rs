@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use regress_rs::solvers::{PoissonRegressor, Regressor, FittedRegressor};
+//! use anofox_regression::solvers::{PoissonRegressor, Regressor, FittedRegressor};
 //! use faer::{Mat, Col};
 //!
 //! let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64);
@@ -552,7 +552,7 @@ impl Regressor for PoissonRegressor {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// let x = Mat::from_fn(100, 2, |i, j| (i + j) as f64 / 10.0);
 /// let y = Col::from_fn(100, |i| ((i % 10) as f64).round());
@@ -805,7 +805,7 @@ impl FittedRegressor for FittedPoisson {
 /// # Example
 ///
 /// ```rust,ignore
-/// use regress_rs::prelude::*;
+/// use anofox_regression::prelude::*;
 ///
 /// // Basic usage with log link
 /// let model = PoissonRegressor::log()

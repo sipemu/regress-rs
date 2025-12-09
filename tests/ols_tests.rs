@@ -2,9 +2,9 @@
 
 mod common;
 
+use anofox_regression::solvers::{FittedRegressor, OlsRegressor, Regressor};
 use approx::assert_relative_eq;
 use faer::{Col, Mat};
-use regress_rs::solvers::{FittedRegressor, OlsRegressor, Regressor};
 
 // ============================================================================
 // Basic Regression Tests
