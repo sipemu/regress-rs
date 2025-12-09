@@ -1,6 +1,6 @@
 [package]
 name = "regress-rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A robust statistics library for regression analysis"
 license = "MIT"
