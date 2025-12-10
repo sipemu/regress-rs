@@ -52,7 +52,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-anofox-regression = "0.2"
+anofox-regression = "0.3"
 ```
 
 ## Quick Start
@@ -639,7 +639,7 @@ This library is validated against R's statistical functions:
 - `cooks.distance()`, `hatvalues()`, `rstandard()` for diagnostics
 - `car::vif()` for variance inflation factors
 
-All tests ensure numerical agreement with R within appropriate tolerances (474 tests total).
+All tests ensure numerical agreement with R within appropriate tolerances (708 tests total).
 
 ## Dependencies
 
