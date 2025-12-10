@@ -67,16 +67,17 @@ fn multiple_regression() {
     println!("--- Multiple Linear Regression ---\n");
 
     // Generate data: y = 1 + 2*x1 - 0.5*x2 + 0.8*x3 + noise
+    // Use independent predictors to avoid collinearity
     let n = 100;
     let x = Mat::from_fn(n, 3, |i, j| match j {
-        0 => (i as f64) * 0.1,            // x1
-        1 => ((i as f64) * 0.15).sin(),   // x2
-        2 => ((i as f64) * 0.05).powi(2), // x3
+        0 => (i as f64) * 0.1,                       // x1: linear trend
+        1 => ((i as f64) * 0.3).sin() * 2.0,         // x2: oscillating (different frequency)
+        2 => ((i as f64) * 0.7).cos() * 3.0 + 1.5,   // x3: different oscillation, offset
         _ => 0.0,
     });
 
     let y = Col::from_fn(n, |i| {
-        let noise = ((i as f64 * 0.7).sin()) * 0.3;
+        let noise = ((i as f64 * 1.3).sin()) * 0.2;
         1.0 + 2.0 * x[(i, 0)] - 0.5 * x[(i, 1)] + 0.8 * x[(i, 2)] + noise
     });
 
