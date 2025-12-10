@@ -56,10 +56,67 @@ use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 use statrs::function::gamma::ln_gamma;
 use std::f64::consts::PI;
 
-/// Distribution families supported by the ALM.
+/// Loss functions for ALM model fitting and convergence.
+///
+/// The loss function determines how the model measures fit quality during
+/// the iterative optimization process. Different loss functions provide
+/// different trade-offs between efficiency and robustness.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AlmLoss {
+    /// Maximum Likelihood Estimation (default).
+    /// Uses log-likelihood for convergence criterion.
+    /// Most efficient when distributional assumptions are met.
+    Likelihood,
+
+    /// Mean Squared Error: mean((y - fitted)²)
+    /// Equivalent to Normal likelihood, sensitive to outliers.
+    MSE,
+
+    /// Mean Absolute Error: mean(|y - fitted|)
+    /// More robust to outliers than MSE.
+    MAE,
+
+    /// Half Absolute Moment: mean(√|y - fitted|)
+    /// Even more robust, gives less weight to large deviations.
+    HAM,
+
+    /// RObust Likelihood Estimator.
+    /// Trims observations with worst likelihood contributions.
+    /// The `trim` field specifies the fraction to trim (default 0.05 = 5%).
+    ROLE {
+        /// Fraction of observations to trim (0.0 to 0.5)
+        trim: f64,
+    },
+}
+
+impl Default for AlmLoss {
+    fn default() -> Self {
+        AlmLoss::Likelihood
+    }
+}
+
+impl AlmLoss {
+    /// Create ROLE loss with default 5% trim.
+    pub fn role() -> Self {
+        AlmLoss::ROLE { trim: 0.05 }
+    }
+
+    /// Create ROLE loss with custom trim fraction.
+    ///
+    /// # Arguments
+    /// * `trim` - Fraction of observations to trim (clamped to 0.0..0.5)
+    pub fn role_with_trim(trim: f64) -> Self {
+        AlmLoss::ROLE {
+            trim: trim.clamp(0.0, 0.5),
+        }
+    }
+}
+
+/// Distribution families supported by the ALM.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum AlmDistribution {
     /// Normal (Gaussian) distribution - standard linear regression
+    #[default]
     Normal,
     /// Laplace (double exponential) - robust to outliers, LAD regression
     Laplace,
@@ -659,6 +716,104 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
 }
 
 // ============================================================================
+// Loss Functions for Convergence
+// ============================================================================
+
+/// Compute Mean Squared Error: mean((y - mu)²)
+fn compute_mse(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    let n = y.nrows();
+    if n == 0 {
+        return 0.0;
+    }
+    let sum: f64 = (0..n).map(|i| (y[i] - mu[i]).powi(2)).sum();
+    sum / n as f64
+}
+
+/// Compute Mean Absolute Error: mean(|y - mu|)
+fn compute_mae(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    let n = y.nrows();
+    if n == 0 {
+        return 0.0;
+    }
+    let sum: f64 = (0..n).map(|i| (y[i] - mu[i]).abs()).sum();
+    sum / n as f64
+}
+
+/// Compute Half Absolute Moment: mean(√|y - mu|)
+fn compute_ham(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    let n = y.nrows();
+    if n == 0 {
+        return 0.0;
+    }
+    let sum: f64 = (0..n).map(|i| (y[i] - mu[i]).abs().sqrt()).sum();
+    sum / n as f64
+}
+
+/// Compute ROLE (RObust Likelihood Estimator): trimmed log-likelihood.
+///
+/// Computes pointwise log-likelihoods, sorts them, and returns the sum
+/// after trimming the worst `trim` fraction of observations.
+fn compute_role(
+    y: &Col<f64>,
+    mu: &Col<f64>,
+    distribution: AlmDistribution,
+    scale: f64,
+    extra: Option<f64>,
+    trim: f64,
+) -> f64 {
+    let n = y.nrows();
+    if n == 0 {
+        return 0.0;
+    }
+
+    // Compute pointwise log-likelihoods
+    let mut point_lls: Vec<f64> = (0..n)
+        .map(|i| {
+            let yi = Col::from_fn(1, |_| y[i]);
+            let mui = Col::from_fn(1, |_| mu[i]);
+            log_likelihood(&yi, &mui, distribution, scale, extra)
+        })
+        .collect();
+
+    // Sort ascending (worst/most negative first)
+    point_lls.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Number of observations to trim
+    let n_trim = ((n as f64 * trim).ceil() as usize).min(n - 1);
+
+    // Sum the kept observations (skip the worst n_trim)
+    point_lls.iter().skip(n_trim).sum()
+}
+
+/// Compute the loss value for a given loss function.
+///
+/// For loss functions that are minimized (MSE, MAE, HAM), returns a positive value.
+/// For likelihood-based losses (Likelihood, ROLE), returns the negative log-likelihood
+/// (so it can also be minimized).
+pub fn compute_loss(
+    y: &Col<f64>,
+    mu: &Col<f64>,
+    loss: AlmLoss,
+    distribution: AlmDistribution,
+    scale: f64,
+    extra: Option<f64>,
+) -> f64 {
+    match loss {
+        AlmLoss::Likelihood => {
+            // Return negative log-likelihood (to minimize)
+            -log_likelihood(y, mu, distribution, scale, extra)
+        }
+        AlmLoss::MSE => compute_mse(y, mu),
+        AlmLoss::MAE => compute_mae(y, mu),
+        AlmLoss::HAM => compute_ham(y, mu),
+        AlmLoss::ROLE { trim } => {
+            // Return negative ROLE (to minimize)
+            -compute_role(y, mu, distribution, scale, extra, trim)
+        }
+    }
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -761,6 +916,7 @@ pub struct AlmRegressor {
     distribution: AlmDistribution,
     link: LinkFunction,
     extra_parameter: Option<f64>,
+    loss: AlmLoss,
     max_iterations: usize,
     tolerance: f64,
 }
@@ -779,9 +935,15 @@ impl AlmRegressor {
             distribution,
             link,
             extra_parameter,
+            loss: AlmLoss::default(),
             max_iterations: 100,
             tolerance: 1e-8,
         }
+    }
+
+    /// Get the loss function.
+    pub fn loss(&self) -> AlmLoss {
+        self.loss
     }
 
     /// Create a builder for configuring the regressor.
@@ -821,7 +983,9 @@ impl AlmRegressor {
         let df = (n - n_params) as f64;
         let mut scale = estimate_scale(y, &mu, self.distribution, df.max(1.0));
 
-        let mut prev_ll = log_likelihood(y, &mu, self.distribution, scale, self.extra_parameter);
+        // Initial loss value (using selected loss function)
+        let mut prev_loss =
+            compute_loss(y, &mu, self.loss, self.distribution, scale, self.extra_parameter);
 
         for iter in 0..self.max_iterations {
             // Compute weights and working response for IRLS
@@ -837,10 +1001,13 @@ impl AlmRegressor {
             // Update scale
             scale = estimate_scale(y, &mu, self.distribution, df.max(1.0));
 
-            // Check convergence
-            let ll = log_likelihood(y, &mu, self.distribution, scale, self.extra_parameter);
+            // Check convergence using selected loss function
+            let loss =
+                compute_loss(y, &mu, self.loss, self.distribution, scale, self.extra_parameter);
 
-            if (ll - prev_ll).abs() < self.tolerance * (1.0 + prev_ll.abs()) {
+            // Convergence criterion: relative change in loss is small
+            // (loss is always in minimization form, so we check if it decreased or stabilized)
+            if (loss - prev_loss).abs() < self.tolerance * (1.0 + prev_loss.abs()) {
                 break;
             }
 
@@ -848,7 +1015,7 @@ impl AlmRegressor {
                 // Allow convergence failure for now - return best estimate
             }
 
-            prev_ll = ll;
+            prev_loss = loss;
         }
 
         // Compute final results
@@ -1336,6 +1503,7 @@ impl AlmRegressor {
             distribution: self.distribution,
             link: self.link,
             extra_parameter: self.extra_parameter,
+            loss: self.loss,
             scale,
             result,
         })
@@ -1539,6 +1707,7 @@ pub struct FittedAlm {
     distribution: AlmDistribution,
     link: LinkFunction,
     extra_parameter: Option<f64>,
+    loss: AlmLoss,
     scale: f64,
     result: RegressionResult,
 }
@@ -1552,6 +1721,11 @@ impl FittedAlm {
     /// Get the link function used.
     pub fn link(&self) -> LinkFunction {
         self.link
+    }
+
+    /// Get the loss function used.
+    pub fn loss(&self) -> AlmLoss {
+        self.loss
     }
 
     /// Get the estimated scale parameter.
@@ -1663,6 +1837,7 @@ pub struct AlmRegressorBuilder {
     distribution: AlmDistribution,
     link: Option<LinkFunction>,
     extra_parameter: Option<f64>,
+    loss: AlmLoss,
     max_iterations: usize,
     tolerance: f64,
 }
@@ -1674,6 +1849,7 @@ impl Default for AlmRegressorBuilder {
             distribution: AlmDistribution::Normal,
             link: None,
             extra_parameter: None,
+            loss: AlmLoss::default(),
             max_iterations: 100,
             tolerance: 1e-8,
         }
@@ -1734,11 +1910,46 @@ impl AlmRegressorBuilder {
         self
     }
 
+    /// Set the loss function for convergence criterion.
+    ///
+    /// # Arguments
+    /// * `loss` - The loss function to use (default: `AlmLoss::Likelihood`)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let model = AlmRegressor::builder()
+    ///     .distribution(AlmDistribution::Normal)
+    ///     .loss(AlmLoss::MAE)  // Use Mean Absolute Error
+    ///     .build();
+    /// ```
+    pub fn loss(mut self, loss: AlmLoss) -> Self {
+        self.loss = loss;
+        self
+    }
+
+    /// Set ROLE (RObust Likelihood Estimator) as the loss function with custom trim.
+    ///
+    /// # Arguments
+    /// * `trim` - Fraction of observations to trim (0.0 to 0.5, default 0.05)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let model = AlmRegressor::builder()
+    ///     .distribution(AlmDistribution::Normal)
+    ///     .role_trim(0.10)  // Trim 10% worst observations
+    ///     .build();
+    /// ```
+    pub fn role_trim(mut self, trim: f64) -> Self {
+        self.loss = AlmLoss::role_with_trim(trim);
+        self
+    }
+
     /// Build the ALM regressor.
     pub fn build(self) -> AlmRegressor {
         let options = self.options_builder.build_unchecked();
         let mut alm =
             AlmRegressor::new(options, self.distribution, self.link, self.extra_parameter);
+        alm.loss = self.loss;
         alm.max_iterations = self.max_iterations;
         alm.tolerance = self.tolerance;
         alm

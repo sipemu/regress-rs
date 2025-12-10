@@ -1,9 +1,12 @@
 //! Regression solvers implementing various estimation methods.
 
+pub mod aid;
 pub mod alm;
 mod binomial;
 mod bls;
 mod elastic_net;
+pub mod lm_dynamic;
+mod lowess;
 mod negative_binomial;
 mod ols;
 mod poisson;
@@ -13,7 +16,16 @@ mod traits;
 mod tweedie;
 mod wls;
 
-pub use alm::{AlmDistribution, AlmRegressor, AlmRegressorBuilder, FittedAlm, LinkFunction};
+pub use aid::{
+    AidClassifier, AidClassifierBuilder, AnomalyType, DemandClassification, DemandDistribution,
+    DemandType, DistributionParameters,
+};
+pub use alm::{
+    AlmDistribution, AlmLoss, AlmRegressor, AlmRegressorBuilder, FittedAlm, LinkFunction,
+};
+pub use lm_dynamic::{
+    FittedLmDynamic, InformationCriterion, LmDynamicRegressor, LmDynamicRegressorBuilder, ModelSpec,
+};
 pub use binomial::{BinomialRegressor, FittedBinomial};
 pub use bls::{BlsRegressor, FittedBls};
 pub use elastic_net::{ElasticNetRegressor, FittedElasticNet};
