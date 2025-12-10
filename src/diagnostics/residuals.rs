@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_standardized_residuals() {
-        let residuals = Col::from_fn(10, |i| (i as f64 - 4.5));
+        let residuals = Col::from_fn(10, |i| i as f64 - 4.5);
         let mse = 10.0; // arbitrary
 
         let std_resid = standardized_residuals(&residuals, mse);
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_studentized_residuals() {
-        let residuals = Col::from_fn(10, |i| (i as f64 - 4.5));
+        let residuals = Col::from_fn(10, |i| i as f64 - 4.5);
         let leverage = Col::from_fn(10, |_| 0.2); // uniform leverage
         let mse = 10.0;
 

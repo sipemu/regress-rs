@@ -17,9 +17,7 @@
 //!
 //! Run with: `cargo run --example lm_dynamic`
 
-use anofox_regression::solvers::{
-    FittedLmDynamic, InformationCriterion, LmDynamicRegressor, LmDynamicRegressorBuilder, Regressor,
-};
+use anofox_regression::solvers::{InformationCriterion, LmDynamicRegressor, Regressor};
 use faer::{Col, Mat};
 
 fn main() {

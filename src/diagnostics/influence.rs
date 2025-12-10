@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_cooks_distance_non_negative() {
-        let residuals = Col::from_fn(20, |i| (i as f64 - 9.5));
+        let residuals = Col::from_fn(20, |i| i as f64 - 9.5);
         let leverage = Col::from_fn(20, |i| 0.1 + 0.02 * i as f64);
         let mse = 10.0;
         let n_params = 3;

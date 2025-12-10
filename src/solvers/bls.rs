@@ -832,7 +832,7 @@ mod tests {
     fn test_bls_unconstrained_matches_ols() {
         // With no bounds, BLS should approximate OLS
         let x = Mat::from_fn(20, 2, |i, j| ((i + 1) * (j + 1)) as f64);
-        let y = Col::from_fn(20, |i| (2.0 * i as f64 + 1.0));
+        let y = Col::from_fn(20, |i| 2.0 * i as f64 + 1.0);
 
         let bls_fitted = BlsRegressor::builder()
             .with_intercept(false)

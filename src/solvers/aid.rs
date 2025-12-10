@@ -172,7 +172,8 @@ impl DemandClassification {
 /// Automatic Identification of Demand (AID) classifier.
 #[derive(Debug, Clone)]
 pub struct AidClassifier {
-    /// Significance level for anomaly detection
+    /// Significance level for anomaly detection (reserved for future use)
+    #[allow(dead_code)]
     anomaly_alpha: f64,
     /// Threshold for classifying demand as intermittent (proportion of zeros)
     intermittent_threshold: f64,

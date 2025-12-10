@@ -1052,7 +1052,7 @@ mod tests {
             .fit(&x, &y)
             .expect("model should fit");
 
-        let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 + 1.0));
+        let x_new = Mat::from_fn(5, 1, |i, _| i as f64 + 1.0);
         let pred = fitted.predict_with_se(
             &x_new,
             PredictionType::Response,
@@ -1074,7 +1074,7 @@ mod tests {
         let n = 100;
         let x = Mat::from_fn(n, 1, |i, _| (i as f64) / 10.0);
         // Different exposures
-        let exposure = Col::from_fn(n, |i| (1.0 + (i % 3) as f64));
+        let exposure = Col::from_fn(n, |i| 1.0 + (i % 3) as f64);
         let offset = Col::from_fn(n, |i| exposure[i].ln());
 
         // Generate y = Poisson(exposure * exp(0.5 + 0.2*x))
@@ -1108,7 +1108,7 @@ mod tests {
             .fit(&x, &y)
             .expect("model should fit");
 
-        let x_new = Mat::from_fn(5, 1, |i, _| (i as f64 + 1.0));
+        let x_new = Mat::from_fn(5, 1, |i, _| i as f64 + 1.0);
         let offset_new = Col::from_fn(5, |_| 0.5_f64.ln()); // Half exposure
 
         let pred_no_offset = fitted.predict(&x_new);

@@ -987,7 +987,6 @@ mod tests {
     fn test_initialize_mu_poisson() {
         let fam = TweedieFamily::poisson();
         let y = vec![0.0, 1.0, 2.0, 3.0, 4.0];
-        let y_mean = 2.0;
 
         let mu = fam.initialize_mu(&y);
 
@@ -1005,7 +1004,6 @@ mod tests {
     fn test_initialize_mu_with_negative() {
         let fam = TweedieFamily::poisson();
         let y = vec![-1.0, -2.0, 0.0, 1.0, 2.0];
-        let y_mean: f64 = y.iter().sum::<f64>() / y.len() as f64;
 
         let mu = fam.initialize_mu(&y);
 

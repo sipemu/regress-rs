@@ -311,7 +311,6 @@ impl LmDynamicRegressor {
         p: usize,
     ) -> Mat<f64> {
         let n = weights.nrows();
-        let n_models = specs.len();
 
         // Number of coefficient columns: p (features) + 1 if intercept
         let n_coef_cols = p + if self.options.with_intercept { 1 } else { 0 };
