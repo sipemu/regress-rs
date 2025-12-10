@@ -14,6 +14,7 @@ use crate::core::{
 };
 use crate::diagnostics::{deviance_residuals, pearson_residuals, working_residuals};
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
+use crate::utils::detect_constant_columns;
 use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, Normal};
 
@@ -133,6 +134,9 @@ impl TweedieRegressor {
             x.clone()
         };
 
+        // Detect constant/collinear columns
+        let aliased = detect_constant_columns(x, self.options.rank_tolerance);
+
         // Initialize μ
         let y_vec: Vec<f64> = (0..n_samples).map(|i| y[i]).collect();
         let mut mu: Vec<f64> = self.family.initialize_mu(&y_vec);
@@ -224,6 +228,7 @@ impl TweedieRegressor {
             n_params,
             iterations,
             self.offset.clone(),
+            aliased,
         )
     }
 
@@ -311,6 +316,7 @@ impl TweedieRegressor {
         n_params: usize,
         iterations: usize,
         offset: Option<Col<f64>>,
+        aliased: Vec<bool>,
     ) -> Result<FittedTweedie, RegressionError> {
         let n_samples = x.nrows();
         let n_features = x.ncols();
@@ -407,7 +413,7 @@ impl TweedieRegressor {
         result.rank = rank;
         result.n_parameters = n_params;
         result.n_observations = n_samples;
-        result.aliased = vec![false; n_features];
+        result.aliased = aliased.clone();
         result.r_squared = r_squared;
         result.adj_r_squared = adj_r_squared;
         result.mse = mse;
@@ -452,6 +458,7 @@ impl TweedieRegressor {
             y_values: y.clone(),
             xtwx_inverse,
             offset,
+            aliased,
         })
     }
 
@@ -642,6 +649,9 @@ pub struct FittedTweedie {
     /// Offset used in fitting (stored for potential residual calculations).
     #[allow(dead_code)]
     offset: Option<Col<f64>>,
+    /// Aliased (collinear or constant) columns.
+    #[allow(dead_code)]
+    aliased: Vec<bool>,
 }
 
 impl FittedTweedie {

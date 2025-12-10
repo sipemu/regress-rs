@@ -31,6 +31,7 @@ use crate::core::{
 };
 use crate::diagnostics::{deviance_residuals, pearson_residuals, working_residuals};
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
+use crate::utils::detect_constant_columns;
 use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, Normal};
 
@@ -178,7 +179,12 @@ impl PoissonRegressor {
             });
         }
 
-        self.build_result(x, y, &x_design, &beta, &mu, &eta, n_params, iterations)
+        // Detect constant columns in original feature matrix
+        let aliased = detect_constant_columns(x, self.options.rank_tolerance);
+
+        self.build_result(
+            x, y, &x_design, &beta, &mu, &eta, n_params, iterations, aliased,
+        )
     }
 
     fn compute_irls_quantities(&self, y: &[f64], mu: &[f64], eta: &[f64]) -> (Vec<f64>, Vec<f64>) {
@@ -259,6 +265,7 @@ impl PoissonRegressor {
         _eta: &[f64],
         n_params: usize,
         iterations: usize,
+        aliased: Vec<bool>,
     ) -> Result<FittedPoisson, RegressionError> {
         let n_samples = x.nrows();
         let n_features = x.ncols();
@@ -351,7 +358,7 @@ impl PoissonRegressor {
         result.rank = rank;
         result.n_parameters = n_params;
         result.n_observations = n_samples;
-        result.aliased = vec![false; n_features];
+        result.aliased = aliased.clone();
         result.r_squared = r_squared;
         result.adj_r_squared = adj_r_squared;
         result.mse = mse;
@@ -421,6 +428,7 @@ impl PoissonRegressor {
             y_values: y.clone(),
             xtwx_inverse,
             offset: self.offset.clone(),
+            aliased,
         })
     }
 
@@ -599,6 +607,9 @@ pub struct FittedPoisson {
     /// Offset used in fitting (stored for potential residual calculations).
     #[allow(dead_code)]
     offset: Option<Col<f64>>,
+    /// Aliased (collinear or constant) columns.
+    #[allow(dead_code)]
+    aliased: Vec<bool>,
 }
 
 impl FittedPoisson {

@@ -4,10 +4,13 @@ use crate::core::{
     IntervalType, LambdaScaling, PredictionResult, RegressionOptions, RegressionOptionsBuilder,
     RegressionResult,
 };
-use crate::inference::compute_prediction_intervals;
+use crate::inference::{
+    compute_prediction_intervals, compute_xtx_inverse_augmented_reduced,
+    compute_xtx_inverse_reduced,
+};
 use crate::solvers::ridge::RidgeRegressor;
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
-use crate::utils::{center_columns, center_vector};
+use crate::utils::{center_columns, center_vector, detect_constant_columns};
 use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 
@@ -74,12 +77,14 @@ impl Regressor for ElasticNetRegressor {
         if self.options.alpha == 0.0 {
             let ridge = RidgeRegressor::new(self.options.clone());
             let ridge_fitted = ridge.fit(x, y)?;
-            // For pure Ridge, use the same inverse as Ridge
-            let xtx_inverse = crate::inference::compute_xtx_inverse_augmented(x).ok();
+            // For pure Ridge, use the same aliased mask from result
+            let aliased = ridge_fitted.result().aliased.clone();
+            let xtx_inverse = compute_xtx_inverse_augmented_reduced(x, &aliased).ok();
             return Ok(FittedElasticNet {
                 options: self.options.clone(),
                 result: ridge_fitted.result().clone(),
                 xtx_inverse,
+                aliased,
             });
         }
 
@@ -102,6 +107,9 @@ impl Regressor for ElasticNetRegressor {
         }
 
         if self.options.with_intercept {
+            // Detect constant columns (aliased with intercept)
+            let constant_cols = detect_constant_columns(x, self.options.rank_tolerance);
+
             // Center the data
             let (x_centered, x_means) = center_columns(x);
             let (y_centered, y_mean) = center_vector(y);
@@ -112,7 +120,17 @@ impl Regressor for ElasticNetRegressor {
             // Compute intercept: intercept = y_mean - x_means' * coefficients
             let mut intercept = y_mean;
             for j in 0..n_features {
-                intercept -= x_means[j] * coefficients[j];
+                if !constant_cols[j] {
+                    intercept -= x_means[j] * coefficients[j];
+                }
+            }
+
+            // Mark aliased columns (constant or zero coefficient due to L1)
+            let mut aliased = constant_cols.clone();
+            for j in 0..n_features {
+                if coefficients[j].abs() < 1e-10 {
+                    aliased[j] = true;
+                }
             }
 
             // Compute fitted values and residuals
@@ -122,15 +140,20 @@ impl Regressor for ElasticNetRegressor {
             for i in 0..n_samples {
                 let mut pred = intercept;
                 for j in 0..n_features {
-                    pred += x[(i, j)] * coefficients[j];
+                    if !constant_cols[j] {
+                        pred += x[(i, j)] * coefficients[j];
+                    }
                 }
                 fitted_values[i] = pred;
                 residuals[i] = y[i] - pred;
             }
 
             // Count non-zero coefficients for effective rank
-            let n_nonzero = coefficients.iter().filter(|&&c| c.abs() > 1e-10).count();
-            let aliased = vec![false; n_features];
+            let n_nonzero = coefficients
+                .iter()
+                .enumerate()
+                .filter(|(j, &c)| !constant_cols[*j] && c.abs() > 1e-10)
+                .count();
             let n_params = n_nonzero + 1; // +1 for intercept
 
             let result = self.compute_statistics(
@@ -140,23 +163,42 @@ impl Regressor for ElasticNetRegressor {
                 Some(intercept),
                 &residuals,
                 &fitted_values,
-                &aliased,
+                &constant_cols,
                 n_nonzero,
                 n_params,
             )?;
 
-            // Compute (X_aug'X_aug)⁻¹ for prediction intervals
+            // Compute (X_aug'X_aug)⁻¹ for prediction intervals (using non-aliased columns)
             // Note: This is approximate for L1-penalized models
-            let xtx_inverse = crate::inference::compute_xtx_inverse_augmented(x).ok();
+            let xtx_inverse = compute_xtx_inverse_augmented_reduced(x, &constant_cols).ok();
 
             Ok(FittedElasticNet {
                 options: self.options.clone(),
                 result,
                 xtx_inverse,
+                aliased: constant_cols,
             })
         } else {
-            // No intercept case
+            // No intercept case - detect zero-variance columns
+            let mut aliased = vec![false; n_features];
+            for j in 0..n_features {
+                let mut col_sq = 0.0;
+                for i in 0..n_samples {
+                    col_sq += x[(i, j)] * x[(i, j)];
+                }
+                if col_sq < self.options.rank_tolerance {
+                    aliased[j] = true;
+                }
+            }
+
             let coefficients = self.coordinate_descent(x, y)?;
+
+            // Mark zero coefficients as aliased
+            for j in 0..n_features {
+                if coefficients[j].abs() < 1e-10 {
+                    aliased[j] = true;
+                }
+            }
 
             // Compute fitted values and residuals
             let mut fitted_values = Col::zeros(n_samples);
@@ -171,8 +213,11 @@ impl Regressor for ElasticNetRegressor {
                 residuals[i] = y[i] - pred;
             }
 
-            let n_nonzero = coefficients.iter().filter(|&&c| c.abs() > 1e-10).count();
-            let aliased = vec![false; n_features];
+            let n_nonzero = coefficients
+                .iter()
+                .enumerate()
+                .filter(|(j, &c)| !aliased[*j] && c.abs() > 1e-10)
+                .count();
             let n_params = n_nonzero;
 
             let result = self.compute_statistics(
@@ -187,14 +232,15 @@ impl Regressor for ElasticNetRegressor {
                 n_params,
             )?;
 
-            // Compute (X'X)⁻¹ for prediction intervals
+            // Compute (X'X)⁻¹ for prediction intervals (using non-aliased columns)
             // Note: This is approximate for L1-penalized models
-            let xtx_inverse = crate::inference::compute_xtx_inverse(x).ok();
+            let xtx_inverse = compute_xtx_inverse_reduced(x, &aliased).ok();
 
             Ok(FittedElasticNet {
                 options: self.options.clone(),
                 result,
                 xtx_inverse,
+                aliased,
             })
         }
     }
@@ -401,9 +447,11 @@ impl ElasticNetRegressor {
 pub struct FittedElasticNet {
     options: RegressionOptions,
     result: RegressionResult,
-    /// (X'X)⁻¹ or (X_aug'X_aug)⁻¹ for prediction intervals
+    /// (X'X)⁻¹ or (X_aug'X_aug)⁻¹ for prediction intervals (reduced to non-aliased columns)
     /// Note: Standard errors for L1-penalized models are approximate
     xtx_inverse: Option<Mat<f64>>,
+    /// Which columns are aliased (constant or zero coefficient)
+    aliased: Vec<bool>,
 }
 
 impl FittedElasticNet {
@@ -472,8 +520,11 @@ impl FittedRegressor for FittedElasticNet {
                         let df = self.result.residual_df() as f64;
                         let has_intercept = self.result.intercept.is_some();
 
+                        // Filter x to only non-aliased columns (to match xtx_inverse dimensions)
+                        let x_reduced = self.reduce_to_non_aliased(x);
+
                         compute_prediction_intervals(
-                            x,
+                            &x_reduced,
                             xtx_inv,
                             &predictions,
                             self.result.mse,
@@ -498,6 +549,31 @@ impl FittedRegressor for FittedElasticNet {
                 }
             }
         }
+    }
+}
+
+impl FittedElasticNet {
+    /// Reduce x to only non-aliased columns.
+    fn reduce_to_non_aliased(&self, x: &Mat<f64>) -> Mat<f64> {
+        let n_samples = x.nrows();
+        let non_aliased_cols: Vec<usize> = self
+            .aliased
+            .iter()
+            .enumerate()
+            .filter(|(_, &is_aliased)| !is_aliased)
+            .map(|(j, _)| j)
+            .collect();
+
+        let n_reduced = non_aliased_cols.len();
+        let mut x_reduced = Mat::zeros(n_samples, n_reduced);
+
+        for i in 0..n_samples {
+            for (k, &j) in non_aliased_cols.iter().enumerate() {
+                x_reduced[(i, k)] = x[(i, j)];
+            }
+        }
+
+        x_reduced
     }
 }
 

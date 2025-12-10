@@ -4,8 +4,8 @@ use crate::core::{
     IntervalType, PredictionResult, RegressionOptions, RegressionOptionsBuilder, RegressionResult,
 };
 use crate::inference::{
-    compute_prediction_intervals, compute_xtx_inverse, compute_xtx_inverse_augmented,
-    CoefficientInference,
+    compute_prediction_intervals, compute_xtx_inverse_augmented_reduced,
+    compute_xtx_inverse_reduced, CoefficientInference,
 };
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
 use crate::utils::{center_columns, center_vector, detect_constant_columns};
@@ -161,13 +161,14 @@ impl Regressor for OlsRegressor {
                 n_params,
             )?;
 
-            // Compute (X_aug'X_aug)⁻¹ for prediction intervals
-            let xtx_inverse = compute_xtx_inverse_augmented(x).ok();
+            // Compute (X_aug'X_aug)⁻¹ for prediction intervals (using non-aliased columns)
+            let xtx_inverse = compute_xtx_inverse_augmented_reduced(x, &aliased).ok();
 
             Ok(FittedOls {
                 options: self.options.clone(),
                 result,
                 xtx_inverse,
+                aliased: aliased.clone(),
             })
         } else {
             // No intercept case
@@ -205,13 +206,14 @@ impl Regressor for OlsRegressor {
                 n_params,
             )?;
 
-            // Compute (X'X)⁻¹ for prediction intervals (no augmentation without intercept)
-            let xtx_inverse = compute_xtx_inverse(x).ok();
+            // Compute (X'X)⁻¹ for prediction intervals (using non-aliased columns)
+            let xtx_inverse = compute_xtx_inverse_reduced(x, &aliased).ok();
 
             Ok(FittedOls {
                 options: self.options.clone(),
                 result,
                 xtx_inverse,
+                aliased: aliased.clone(),
             })
         }
     }
@@ -533,8 +535,10 @@ impl OlsRegressor {
 pub struct FittedOls {
     options: RegressionOptions,
     result: RegressionResult,
-    /// (X'X)⁻¹ or (X_aug'X_aug)⁻¹ for prediction intervals
+    /// (X'X)⁻¹ or (X_aug'X_aug)⁻¹ for prediction intervals (reduced to non-aliased columns)
     xtx_inverse: Option<Mat<f64>>,
+    /// Which columns are aliased (collinear or constant)
+    aliased: Vec<bool>,
 }
 
 impl FittedOls {
@@ -586,8 +590,11 @@ impl FittedRegressor for FittedOls {
                         let df = self.result.residual_df() as f64;
                         let has_intercept = self.result.intercept.is_some();
 
+                        // Filter x to only non-aliased columns (to match xtx_inverse dimensions)
+                        let x_reduced = self.reduce_to_non_aliased(x);
+
                         compute_prediction_intervals(
-                            x,
+                            &x_reduced,
                             xtx_inv,
                             &predictions,
                             self.result.mse,
@@ -613,6 +620,31 @@ impl FittedRegressor for FittedOls {
                 }
             }
         }
+    }
+}
+
+impl FittedOls {
+    /// Reduce x to only non-aliased columns.
+    fn reduce_to_non_aliased(&self, x: &Mat<f64>) -> Mat<f64> {
+        let n_samples = x.nrows();
+        let non_aliased_cols: Vec<usize> = self
+            .aliased
+            .iter()
+            .enumerate()
+            .filter(|(_, &is_aliased)| !is_aliased)
+            .map(|(j, _)| j)
+            .collect();
+
+        let n_reduced = non_aliased_cols.len();
+        let mut x_reduced = Mat::zeros(n_samples, n_reduced);
+
+        for i in 0..n_samples {
+            for (k, &j) in non_aliased_cols.iter().enumerate() {
+                x_reduced[(i, k)] = x[(i, j)];
+            }
+        }
+
+        x_reduced
     }
 }
 

@@ -37,7 +37,7 @@ pub use glm_residuals::{
     standardized_pearson_residuals, working_residuals,
 };
 pub use influence::{cooks_distance, dffits, influential_cooks, influential_dffits};
-pub use leverage::{compute_leverage, high_leverage_points};
+pub use leverage::{compute_leverage, compute_leverage_with_aliased, high_leverage_points};
 pub use residuals::{
     externally_studentized_residuals, residual_outliers, standardized_residuals,
     studentized_residuals,

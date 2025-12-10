@@ -4,8 +4,8 @@ use crate::core::{
     IntervalType, PredictionResult, RegressionOptions, RegressionOptionsBuilder, RegressionResult,
 };
 use crate::inference::{
-    compute_prediction_intervals, compute_xtwx_inverse_augmented, compute_xtx_inverse_augmented,
-    CoefficientInference,
+    compute_prediction_intervals, compute_xtwx_inverse_augmented_reduced,
+    compute_xtwx_inverse_reduced, compute_xtx_inverse_augmented_reduced, CoefficientInference,
 };
 use crate::solvers::ols::OlsRegressor;
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
@@ -138,13 +138,15 @@ impl Regressor for WlsRegressor {
         if all_equal && first_weight > 0.0 {
             let ols = OlsRegressor::new(self.options.clone());
             let ols_fitted = ols.fit(x, y)?;
-            // For uniform weights, use unweighted (X'X)⁻¹
-            let xtx_inverse = compute_xtx_inverse_augmented(x).ok();
+            // For uniform weights, use unweighted (X'X)⁻¹ with aliased columns filtered
+            let aliased = ols_fitted.result().aliased.clone();
+            let xtx_inverse = compute_xtx_inverse_augmented_reduced(x, &aliased).ok();
             return Ok(FittedWls {
                 options: self.options.clone(),
                 weights: weights.clone(),
                 result: ols_fitted.result().clone(),
                 xtwx_inverse: xtx_inverse,
+                aliased,
             });
         }
 
@@ -214,14 +216,15 @@ impl Regressor for WlsRegressor {
                 n_params,
             )?;
 
-            // Compute (X_aug'WX_aug)⁻¹ for prediction intervals
-            let xtwx_inverse = compute_xtwx_inverse_augmented(x, &weights).ok();
+            // Compute (X_aug'WX_aug)⁻¹ for prediction intervals (using non-aliased columns)
+            let xtwx_inverse = compute_xtwx_inverse_augmented_reduced(x, &weights, &aliased).ok();
 
             Ok(FittedWls {
                 options: self.options.clone(),
                 weights,
                 result,
                 xtwx_inverse,
+                aliased,
             })
         } else {
             // No intercept case - detect constant columns in weighted data
@@ -258,64 +261,21 @@ impl Regressor for WlsRegressor {
                 n_params,
             )?;
 
-            // Compute (X'WX)⁻¹ for prediction intervals (no intercept case)
-            let xtwx_inverse = self.compute_xtwx_inverse(x, &weights);
+            // Compute (X'WX)⁻¹ for prediction intervals (using non-aliased columns)
+            let xtwx_inverse = compute_xtwx_inverse_reduced(x, &weights, &aliased).ok();
 
             Ok(FittedWls {
                 options: self.options.clone(),
                 weights,
                 result,
                 xtwx_inverse,
+                aliased,
             })
         }
     }
 }
 
 impl WlsRegressor {
-    /// Compute (X'WX)⁻¹ for the non-augmented design matrix.
-    fn compute_xtwx_inverse(&self, x: &Mat<f64>, weights: &Col<f64>) -> Option<Mat<f64>> {
-        let n_samples = x.nrows();
-        let n_features = x.ncols();
-
-        // Build X'WX
-        let mut xtwx: Mat<f64> = Mat::zeros(n_features, n_features);
-        for i in 0..n_samples {
-            let w = weights[i];
-            for j in 0..n_features {
-                for k in 0..n_features {
-                    xtwx[(j, k)] += w * x[(i, j)] * x[(i, k)];
-                }
-            }
-        }
-
-        // Invert using QR
-        let qr: Qr<f64> = xtwx.qr();
-        let q = qr.compute_Q();
-        let r = qr.R();
-
-        // Check if R is singular
-        for i in 0..n_features {
-            if r[(i, i)].abs() < 1e-10 {
-                return None;
-            }
-        }
-
-        let mut xtwx_inv: Mat<f64> = Mat::zeros(n_features, n_features);
-        let qt = q.transpose();
-
-        for col in 0..n_features {
-            for i in (0..n_features).rev() {
-                let mut sum = qt[(i, col)];
-                for j in (i + 1)..n_features {
-                    sum -= r[(i, j)] * xtwx_inv[(j, col)];
-                }
-                xtwx_inv[(i, col)] = sum / r[(i, i)];
-            }
-        }
-
-        Some(xtwx_inv)
-    }
-
     /// Weighted centering of data.
     ///
     /// Takes ORIGINAL (unweighted) x, y and the weights.
@@ -715,8 +675,10 @@ pub struct FittedWls {
     options: RegressionOptions,
     weights: Col<f64>,
     result: RegressionResult,
-    /// (X'WX)⁻¹ or (X_aug'WX_aug)⁻¹ for prediction intervals
+    /// (X'WX)⁻¹ or (X_aug'WX_aug)⁻¹ for prediction intervals (reduced to non-aliased columns)
     xtwx_inverse: Option<Mat<f64>>,
+    /// Which columns are aliased (collinear or constant)
+    aliased: Vec<bool>,
 }
 
 impl FittedWls {
@@ -772,10 +734,13 @@ impl FittedRegressor for FittedWls {
                         let df = self.result.residual_df() as f64;
                         let has_intercept = self.result.intercept.is_some();
 
+                        // Filter x to only non-aliased columns (to match xtwx_inverse dimensions)
+                        let x_reduced = self.reduce_to_non_aliased(x);
+
                         // For WLS prediction on new data, we use the weighted inverse
                         // but predictions on new data are unweighted
                         compute_prediction_intervals(
-                            x,
+                            &x_reduced,
                             xtwx_inv,
                             &predictions,
                             self.result.mse,
@@ -800,6 +765,31 @@ impl FittedRegressor for FittedWls {
                 }
             }
         }
+    }
+}
+
+impl FittedWls {
+    /// Reduce x to only non-aliased columns.
+    fn reduce_to_non_aliased(&self, x: &Mat<f64>) -> Mat<f64> {
+        let n_samples = x.nrows();
+        let non_aliased_cols: Vec<usize> = self
+            .aliased
+            .iter()
+            .enumerate()
+            .filter(|(_, &is_aliased)| !is_aliased)
+            .map(|(j, _)| j)
+            .collect();
+
+        let n_reduced = non_aliased_cols.len();
+        let mut x_reduced = Mat::zeros(n_samples, n_reduced);
+
+        for i in 0..n_samples {
+            for (k, &j) in non_aliased_cols.iter().enumerate() {
+                x_reduced[(i, k)] = x[(i, j)];
+            }
+        }
+
+        x_reduced
     }
 }
 

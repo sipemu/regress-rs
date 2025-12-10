@@ -32,6 +32,7 @@ use crate::core::{
 };
 use crate::diagnostics::{deviance_residuals, pearson_residuals, working_residuals};
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
+use crate::utils::detect_constant_columns;
 use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor, Normal};
 
@@ -110,6 +111,9 @@ impl NegativeBinomialRegressor {
         } else {
             x.clone()
         };
+
+        // Detect constant/collinear columns
+        let aliased = detect_constant_columns(x, self.options.rank_tolerance);
 
         let y_vec: Vec<f64> = (0..n_samples).map(|i| y[i]).collect();
         let mut family = self.family;
@@ -222,6 +226,7 @@ impl NegativeBinomialRegressor {
             n_params,
             total_iterations,
             family,
+            aliased,
         )
     }
 
@@ -308,6 +313,7 @@ impl NegativeBinomialRegressor {
         n_params: usize,
         iterations: usize,
         family: NegativeBinomialFamily,
+        aliased: Vec<bool>,
     ) -> Result<FittedNegativeBinomial, RegressionError> {
         let n_samples = x.nrows();
         let n_features = x.ncols();
@@ -399,7 +405,7 @@ impl NegativeBinomialRegressor {
         result.rank = rank;
         result.n_parameters = n_params;
         result.n_observations = n_samples;
-        result.aliased = vec![false; n_features];
+        result.aliased = aliased.clone();
         result.r_squared = r_squared;
         result.adj_r_squared = adj_r_squared;
         result.mse = mse;
@@ -470,6 +476,7 @@ impl NegativeBinomialRegressor {
             y_values: y.clone(),
             xtwx_inverse,
             offset: self.offset.clone(),
+            aliased,
         })
     }
 
@@ -649,6 +656,9 @@ pub struct FittedNegativeBinomial {
     /// Offset used in fitting (stored for potential residual calculations).
     #[allow(dead_code)]
     offset: Option<Col<f64>>,
+    /// Aliased (collinear or constant) columns.
+    #[allow(dead_code)]
+    aliased: Vec<bool>,
 }
 
 impl FittedNegativeBinomial {

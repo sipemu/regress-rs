@@ -284,6 +284,179 @@ pub fn compute_xtx_inverse(x: &Mat<f64>) -> Result<Mat<f64>, &'static str> {
     compute_matrix_inverse(&xtx)
 }
 
+/// Compute (X'X)⁻¹ for the augmented design matrix, excluding aliased columns.
+///
+/// When some features are aliased (collinear or constant), we compute the inverse
+/// using only the non-aliased columns. This allows prediction intervals to be
+/// computed correctly even when the full matrix is singular.
+///
+/// # Arguments
+/// * `x` - Feature matrix (n × p), WITHOUT the intercept column
+/// * `aliased` - Boolean mask indicating which columns are aliased
+///
+/// # Returns
+/// * `Ok(Mat<f64>)` - The (1 + n_non_aliased) × (1 + n_non_aliased) inverse matrix
+/// * `Err(&'static str)` - If the reduced matrix is still singular
+pub fn compute_xtx_inverse_augmented_reduced(
+    x: &Mat<f64>,
+    aliased: &[bool],
+) -> Result<Mat<f64>, &'static str> {
+    let n_samples = x.nrows();
+    let n_features = x.ncols();
+
+    // Count non-aliased columns
+    let non_aliased_cols: Vec<usize> = (0..n_features).filter(|&j| !aliased[j]).collect();
+    let n_reduced = non_aliased_cols.len();
+    let aug_size = n_reduced + 1; // +1 for intercept
+
+    // Build reduced augmented design matrix [1 | X_reduced]
+    let mut x_aug = Mat::zeros(n_samples, aug_size);
+    for i in 0..n_samples {
+        x_aug[(i, 0)] = 1.0;
+        for (k, &j) in non_aliased_cols.iter().enumerate() {
+            x_aug[(i, k + 1)] = x[(i, j)];
+        }
+    }
+
+    // Compute X_aug'X_aug
+    let xtx_aug = x_aug.transpose() * &x_aug;
+
+    // Compute inverse
+    compute_matrix_inverse(&xtx_aug)
+}
+
+/// Compute (X'X)⁻¹ for a non-augmented design matrix, excluding aliased columns.
+///
+/// # Arguments
+/// * `x` - Design matrix (n × p)
+/// * `aliased` - Boolean mask indicating which columns are aliased
+///
+/// # Returns
+/// * `Ok(Mat<f64>)` - The n_non_aliased × n_non_aliased inverse matrix
+/// * `Err(&'static str)` - If the reduced matrix is still singular
+pub fn compute_xtx_inverse_reduced(
+    x: &Mat<f64>,
+    aliased: &[bool],
+) -> Result<Mat<f64>, &'static str> {
+    let n_samples = x.nrows();
+    let n_features = x.ncols();
+
+    // Count non-aliased columns
+    let non_aliased_cols: Vec<usize> = (0..n_features).filter(|&j| !aliased[j]).collect();
+    let n_reduced = non_aliased_cols.len();
+
+    if n_reduced == 0 {
+        return Err("All columns are aliased");
+    }
+
+    // Build reduced design matrix
+    let mut x_reduced = Mat::zeros(n_samples, n_reduced);
+    for i in 0..n_samples {
+        for (k, &j) in non_aliased_cols.iter().enumerate() {
+            x_reduced[(i, k)] = x[(i, j)];
+        }
+    }
+
+    // Compute X'X and its inverse
+    let xtx = x_reduced.transpose() * &x_reduced;
+    compute_matrix_inverse(&xtx)
+}
+
+/// Compute (X'WX)⁻¹ for the weighted augmented design matrix, excluding aliased columns.
+///
+/// When some features are aliased (collinear or constant), we compute the inverse
+/// using only the non-aliased columns. This allows prediction intervals to be
+/// computed correctly even when the full matrix is singular.
+///
+/// # Arguments
+/// * `x` - Feature matrix (n × p), WITHOUT the intercept column
+/// * `weights` - Weight vector (n × 1), typically IRLS weights
+/// * `aliased` - Boolean mask indicating which columns are aliased
+///
+/// # Returns
+/// * `Ok(Mat<f64>)` - The (1 + n_non_aliased) × (1 + n_non_aliased) inverse matrix
+/// * `Err(&'static str)` - If the reduced matrix is still singular
+pub fn compute_xtwx_inverse_augmented_reduced(
+    x: &Mat<f64>,
+    weights: &Col<f64>,
+    aliased: &[bool],
+) -> Result<Mat<f64>, &'static str> {
+    let n_samples = x.nrows();
+    let n_features = x.ncols();
+
+    // Count non-aliased columns
+    let non_aliased_cols: Vec<usize> = (0..n_features).filter(|&j| !aliased[j]).collect();
+    let n_reduced = non_aliased_cols.len();
+    let aug_size = n_reduced + 1; // +1 for intercept
+
+    // Build X'WX for reduced augmented matrix [1 | X_reduced]
+    let mut xtwx_aug: Mat<f64> = Mat::zeros(aug_size, aug_size);
+
+    for i in 0..n_samples {
+        let w = weights[i];
+
+        // (0,0): sum of weights
+        xtwx_aug[(0, 0)] += w;
+
+        // (0,k+1) and (k+1,0): weighted sum of x_j (for non-aliased j)
+        for (k, &j) in non_aliased_cols.iter().enumerate() {
+            xtwx_aug[(0, k + 1)] += w * x[(i, j)];
+            xtwx_aug[(k + 1, 0)] += w * x[(i, j)];
+        }
+
+        // (k+1, m+1): weighted x_j * x_l (for non-aliased j, l)
+        for (k, &j) in non_aliased_cols.iter().enumerate() {
+            for (m, &l) in non_aliased_cols.iter().enumerate() {
+                xtwx_aug[(k + 1, m + 1)] += w * x[(i, j)] * x[(i, l)];
+            }
+        }
+    }
+
+    compute_matrix_inverse(&xtwx_aug)
+}
+
+/// Compute (X'WX)⁻¹ for a weighted non-augmented design matrix, excluding aliased columns.
+///
+/// # Arguments
+/// * `x` - Design matrix (n × p)
+/// * `weights` - Weight vector (n × 1)
+/// * `aliased` - Boolean mask indicating which columns are aliased
+///
+/// # Returns
+/// * `Ok(Mat<f64>)` - The n_non_aliased × n_non_aliased inverse matrix
+/// * `Err(&'static str)` - If the reduced matrix is still singular
+pub fn compute_xtwx_inverse_reduced(
+    x: &Mat<f64>,
+    weights: &Col<f64>,
+    aliased: &[bool],
+) -> Result<Mat<f64>, &'static str> {
+    let n_samples = x.nrows();
+    let n_features = x.ncols();
+
+    // Count non-aliased columns
+    let non_aliased_cols: Vec<usize> = (0..n_features).filter(|&j| !aliased[j]).collect();
+    let n_reduced = non_aliased_cols.len();
+
+    if n_reduced == 0 {
+        return Err("All columns are aliased");
+    }
+
+    // Build X'WX for reduced matrix
+    let mut xtwx: Mat<f64> = Mat::zeros(n_reduced, n_reduced);
+
+    for i in 0..n_samples {
+        let w = weights[i];
+
+        for (k, &j) in non_aliased_cols.iter().enumerate() {
+            for (m, &l) in non_aliased_cols.iter().enumerate() {
+                xtwx[(k, m)] += w * x[(i, j)] * x[(i, l)];
+            }
+        }
+    }
+
+    compute_matrix_inverse(&xtwx)
+}
+
 /// General matrix inverse using QR decomposition.
 fn compute_matrix_inverse(matrix: &Mat<f64>) -> Result<Mat<f64>, &'static str> {
     let n = matrix.nrows();

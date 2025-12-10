@@ -14,6 +14,35 @@ fn build_design_matrix(x: &Mat<f64>, with_intercept: bool) -> Mat<f64> {
     }
 }
 
+/// Build reduced design matrix excluding aliased columns.
+fn build_design_matrix_reduced(x: &Mat<f64>, aliased: &[bool], with_intercept: bool) -> Mat<f64> {
+    let n = x.nrows();
+    let non_aliased: Vec<usize> = aliased
+        .iter()
+        .enumerate()
+        .filter(|(_, &is_aliased)| !is_aliased)
+        .map(|(j, _)| j)
+        .collect();
+    let p_reduced = non_aliased.len();
+    let total_cols = if with_intercept {
+        p_reduced + 1
+    } else {
+        p_reduced
+    };
+
+    Mat::from_fn(n, total_cols, |i, j| {
+        if with_intercept {
+            if j == 0 {
+                1.0
+            } else {
+                x[(i, non_aliased[j - 1])]
+            }
+        } else {
+            x[(i, non_aliased[j])]
+        }
+    })
+}
+
 /// Compute X'X (cross-product matrix).
 fn compute_xtx(design: &Mat<f64>) -> Mat<f64> {
     design.transpose() * design
@@ -86,6 +115,62 @@ pub fn compute_leverage(x: &Mat<f64>, with_intercept: bool) -> Col<f64> {
 
     let xtx = compute_xtx(&design);
     let xtx_inv = compute_xtx_inverse(&xtx);
+
+    Col::from_fn(n, |i| {
+        let row: Vec<f64> = (0..p).map(|j| design[(i, j)]).collect();
+        compute_single_leverage(&row, &xtx_inv)
+    })
+}
+
+/// Compute leverage values handling aliased (collinear) columns.
+///
+/// This version excludes aliased columns from the design matrix before computing
+/// leverage. The leverage values are computed using only the non-aliased columns,
+/// which gives correct results even when the full X'X matrix would be singular.
+///
+/// # Arguments
+/// * `x` - Feature matrix (n × p)
+/// * `aliased` - Boolean mask indicating which columns are aliased
+/// * `with_intercept` - Whether to include an intercept column
+///
+/// # Returns
+/// Leverage values for each observation
+pub fn compute_leverage_with_aliased(
+    x: &Mat<f64>,
+    aliased: &[bool],
+    with_intercept: bool,
+) -> Col<f64> {
+    let n = x.nrows();
+
+    // If no aliased columns, use the standard method
+    let has_aliased = aliased.iter().any(|&a| a);
+    if !has_aliased {
+        return compute_leverage(x, with_intercept);
+    }
+
+    let design = build_design_matrix_reduced(x, aliased, with_intercept);
+    let p = design.ncols();
+
+    if p == 0 {
+        // All columns aliased - return NaN
+        return Col::from_fn(n, |_| f64::NAN);
+    }
+
+    let xtx = compute_xtx(&design);
+    let xtx_inv = compute_xtx_inverse(&xtx);
+
+    // Check if inverse computation succeeded (diagonal should be non-zero for valid inverse)
+    let mut inverse_valid = true;
+    for i in 0..p {
+        if xtx_inv[(i, i)].abs() < 1e-14 {
+            inverse_valid = false;
+            break;
+        }
+    }
+
+    if !inverse_valid {
+        return Col::from_fn(n, |_| f64::NAN);
+    }
 
     Col::from_fn(n, |i| {
         let row: Vec<f64> = (0..p).map(|j| design[(i, j)]).collect();
