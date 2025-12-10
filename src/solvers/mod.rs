@@ -6,7 +6,7 @@ mod binomial;
 mod bls;
 mod elastic_net;
 pub mod lm_dynamic;
-mod lowess;
+pub mod lowess;
 mod negative_binomial;
 mod ols;
 mod poisson;

@@ -597,4 +597,471 @@ mod tests {
             );
         }
     }
+
+    // === Tests for variance_derivative ===
+
+    #[test]
+    fn test_variance_derivative_normal() {
+        // Tests line 196: var_power == 0 (Normal)
+        let fam = TweedieFamily::gaussian();
+
+        // dV/dμ = 0 for Normal (constant variance)
+        assert!((fam.variance_derivative(1.0) - 0.0).abs() < 1e-10);
+        assert!((fam.variance_derivative(5.0) - 0.0).abs() < 1e-10);
+        assert!((fam.variance_derivative(100.0) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variance_derivative_poisson() {
+        // Tests line 198: var_power == 1 (Poisson)
+        let fam = TweedieFamily::poisson();
+
+        // dV/dμ = 1 for Poisson
+        assert!((fam.variance_derivative(0.5) - 1.0).abs() < 1e-10);
+        assert!((fam.variance_derivative(2.0) - 1.0).abs() < 1e-10);
+        assert!((fam.variance_derivative(10.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variance_derivative_gamma() {
+        // Tests line 200: var_power == 2 (Gamma)
+        let fam = TweedieFamily::gamma();
+
+        // dV/dμ = 2μ for Gamma
+        assert!((fam.variance_derivative(1.0) - 2.0).abs() < 1e-10);
+        assert!((fam.variance_derivative(3.0) - 6.0).abs() < 1e-10);
+        assert!((fam.variance_derivative(5.0) - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_variance_derivative_general() {
+        // Tests line 202: general case
+        let fam = TweedieFamily::inverse_gaussian(); // var_power = 3
+        let mu: f64 = 2.0;
+
+        // dV/dμ = p * μ^(p-1) = 3 * 2^2 = 12
+        let expected = 3.0 * mu.powf(2.0);
+        assert!((fam.variance_derivative(mu) - expected).abs() < 1e-10);
+
+        // Compound Poisson-Gamma (p = 1.5)
+        let fam2 = TweedieFamily::compound_poisson_gamma(1.5);
+        let expected2 = 1.5 * mu.powf(0.5);
+        assert!((fam2.variance_derivative(mu) - expected2).abs() < 1e-10);
+    }
+
+    // === Tests for link_inverse_derivative ===
+
+    #[test]
+    fn test_link_inverse_derivative_log() {
+        // Tests line 249: link_power == 0 (log link)
+        let fam = TweedieFamily::poisson(); // log link
+        let eta: f64 = 2.0;
+
+        // d/dη exp(η) = exp(η)
+        let expected = eta.exp();
+        assert!((fam.link_inverse_derivative(eta) - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_link_inverse_derivative_identity() {
+        // Tests line 251: link_power == 1 (identity link)
+        let fam = TweedieFamily::gaussian(); // identity link
+
+        // d/dη η = 1
+        assert!((fam.link_inverse_derivative(5.0) - 1.0).abs() < 1e-10);
+        assert!((fam.link_inverse_derivative(-3.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_link_inverse_derivative_inverse() {
+        // Tests line 253: link_power == -1 (inverse link)
+        let fam = TweedieFamily::new(2.0, -1.0); // Gamma with inverse link
+        let eta = 2.0;
+
+        // d/dη (1/η) = -1/η²
+        let expected = -1.0 / (eta * eta);
+        assert!((fam.link_inverse_derivative(eta) - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_link_inverse_derivative_general() {
+        // Tests line 255: general power link
+        let fam = TweedieFamily::new(1.0, 0.5); // Power link with q=0.5
+        let eta: f64 = 4.0;
+
+        // d/dη η^(1/q) = (1/q) * η^(1/q - 1) = 2 * 4^1 = 8
+        let expected = (1.0 / 0.5) * eta.powf(1.0 / 0.5 - 1.0);
+        assert!((fam.link_inverse_derivative(eta) - expected).abs() < 1e-10);
+    }
+
+    // === Tests for null_deviance ===
+
+    #[test]
+    fn test_null_deviance_normal() {
+        // Tests lines 360-363
+        let fam = TweedieFamily::gaussian();
+        let y = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let y_mean: f64 = 3.0;
+
+        // Null deviance = sum((y - y_mean)^2) = 10
+        let expected: f64 = y.iter().map(|&yi| (yi - y_mean).powi(2)).sum();
+        let null_dev = fam.null_deviance(&y);
+
+        assert!((null_dev - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_null_deviance_poisson() {
+        let fam = TweedieFamily::poisson();
+        let y = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let y_mean: f64 = 3.0;
+
+        // Null deviance = sum(2 * (y * log(y/y_mean) - (y - y_mean)))
+        let expected: f64 = y
+            .iter()
+            .map(|&yi| {
+                if yi > 0.0 {
+                    2.0 * (yi * (yi / y_mean).ln() - (yi - y_mean))
+                } else {
+                    2.0 * y_mean
+                }
+            })
+            .sum();
+
+        let null_dev = fam.null_deviance(&y);
+        assert!((null_dev - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_null_deviance_gamma() {
+        let fam = TweedieFamily::gamma();
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+
+        // Gamma deviance = 2 * sum(-log(y/mu) + (y-mu)/mu)
+        let null_dev = fam.null_deviance(&y);
+
+        assert!(null_dev.is_finite());
+        assert!(null_dev >= 0.0);
+    }
+
+    // === Tests for canonical_link_power ===
+
+    #[test]
+    fn test_canonical_link_power() {
+        // Tests lines 407-409
+        // Canonical link power = 1 - var_power
+
+        let normal = TweedieFamily::gaussian();
+        assert!((normal.canonical_link_power() - 1.0).abs() < 1e-10); // 1 - 0 = 1
+
+        let poisson = TweedieFamily::poisson();
+        assert!((poisson.canonical_link_power() - 0.0).abs() < 1e-10); // 1 - 1 = 0
+
+        let gamma = TweedieFamily::gamma();
+        assert!((gamma.canonical_link_power() - (-1.0)).abs() < 1e-10); // 1 - 2 = -1
+
+        let ig = TweedieFamily::inverse_gaussian();
+        assert!((ig.canonical_link_power() - (-2.0)).abs() < 1e-10); // 1 - 3 = -2
+    }
+
+    // === Tests for is_valid ===
+
+    #[test]
+    fn test_is_valid() {
+        // Tests lines 399-402
+
+        // Valid cases
+        assert!(TweedieFamily::gaussian().is_valid());
+        assert!(TweedieFamily::poisson().is_valid());
+        assert!(TweedieFamily::gamma().is_valid());
+        assert!(TweedieFamily::new(0.0, 1.0).is_valid()); // p = 0
+        assert!(TweedieFamily::new(1.0, 0.0).is_valid()); // p = 1
+        assert!(TweedieFamily::new(1.5, 0.0).is_valid()); // p in (1, 2)
+        assert!(TweedieFamily::new(3.0, 0.0).is_valid()); // p > 2
+        assert!(TweedieFamily::new(-1.0, 1.0).is_valid()); // p < 0
+    }
+
+    // === Tests for unit_deviance edge cases ===
+
+    #[test]
+    fn test_unit_deviance_gamma_case() {
+        // Tests lines 329-331: Gamma specific formula
+        let fam = TweedieFamily::gamma();
+        let y: f64 = 2.0;
+        let mu: f64 = 3.0;
+
+        // d(y, μ) = 2 * (-log(y/μ) + (y-μ)/μ)
+        let expected = 2.0 * (-(y / mu).ln() + (y - mu) / mu);
+        let dev = fam.unit_deviance(y, mu);
+
+        assert!((dev - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_unit_deviance_general_tweedie() {
+        // Tests lines 333-348: general Tweedie formula
+        let fam = TweedieFamily::inverse_gaussian(); // p = 3
+        let y: f64 = 2.0;
+        let mu: f64 = 1.5;
+        let p: f64 = 3.0;
+
+        let term1 = y.powf(2.0 - p) / ((1.0 - p) * (2.0 - p));
+        let term2 = -y * mu.powf(1.0 - p) / (1.0 - p);
+        let term3 = mu.powf(2.0 - p) / (2.0 - p);
+        let expected = 2.0 * (term1 + term2 + term3);
+
+        let dev = fam.unit_deviance(y, mu);
+        assert!((dev - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_unit_deviance_zero_y_poisson() {
+        // Tests y = 0 case in Poisson
+        let fam = TweedieFamily::poisson();
+        let dev = fam.unit_deviance(0.0, 2.0);
+
+        // When y = 0: d(0, μ) = 2μ
+        assert!((dev - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_unit_deviance_zero_y_general_tweedie() {
+        // Tests y = 0 case in general Tweedie
+        let fam = TweedieFamily::compound_poisson_gamma(1.5);
+        let mu = 2.0;
+        let p = 1.5;
+
+        let dev = fam.unit_deviance(0.0, mu);
+
+        // When y = 0: only term3 contributes
+        let expected = 2.0 * mu.powf(2.0 - p) / (2.0 - p);
+        assert!((dev - expected).abs() < 1e-10);
+    }
+
+    // === Tests for IRLS methods with different families ===
+
+    #[test]
+    fn test_irls_weight_gaussian() {
+        let fam = TweedieFamily::gaussian();
+        let mu = 5.0;
+
+        // For Gaussian with identity link: w = 1 / (V(μ) * (dη/dμ)²) = 1 / (1 * 1²) = 1
+        let weight = fam.irls_weight(mu);
+        assert!((weight - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_irls_weight_gamma() {
+        let fam = TweedieFamily::gamma(); // log link
+        let mu = 2.0;
+
+        // V(μ) = μ² = 4, dη/dμ = 1/μ = 0.5
+        // w = 1 / (4 * 0.25) = 1
+        let weight = fam.irls_weight(mu);
+        assert!((weight - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_irls_weight_inverse_gaussian() {
+        let fam = TweedieFamily::inverse_gaussian(); // log link
+        let mu = 2.0;
+
+        // V(μ) = μ³ = 8, dη/dμ = 1/μ = 0.5
+        // w = 1 / (8 * 0.25) = 0.5
+        let weight = fam.irls_weight(mu);
+        assert!((weight - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_working_response_gaussian() {
+        let fam = TweedieFamily::gaussian();
+        let y = 5.0;
+        let mu = 3.0;
+        let eta = fam.link(mu); // = 3.0 (identity)
+
+        // z = η + (y - μ) * dη/dμ = 3 + (5-3) * 1 = 5
+        let z = fam.working_response(y, mu, eta);
+        assert!((z - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_working_response_gamma() {
+        let fam = TweedieFamily::gamma();
+        let y = 4.0;
+        let mu = 2.0;
+        let eta = fam.link(mu); // = log(2)
+
+        // z = log(2) + (4-2) * (1/2) = log(2) + 1
+        let expected = mu.ln() + (y - mu) / mu;
+        let z = fam.working_response(y, mu, eta);
+        assert!((z - expected).abs() < 1e-10);
+    }
+
+    // === Tests for link_derivative branches ===
+
+    #[test]
+    fn test_link_derivative_all_branches() {
+        let mu = 2.0;
+
+        // Log link (link_power = 0)
+        let log_link = TweedieFamily::poisson();
+        assert!((log_link.link_derivative(mu) - 0.5).abs() < 1e-10); // 1/μ
+
+        // Identity link (link_power = 1)
+        let id_link = TweedieFamily::gaussian();
+        assert!((id_link.link_derivative(mu) - 1.0).abs() < 1e-10);
+
+        // Inverse link (link_power = -1)
+        let inv_link = TweedieFamily::new(2.0, -1.0);
+        assert!((inv_link.link_derivative(mu) - (-0.25)).abs() < 1e-10); // -1/μ²
+
+        // General power link (link_power = 0.5)
+        let pow_link = TweedieFamily::new(1.0, 0.5);
+        let expected = 0.5 * mu.powf(-0.5); // q * μ^(q-1)
+        assert!((pow_link.link_derivative(mu) - expected).abs() < 1e-10);
+    }
+
+    // === Tests for link function branches ===
+
+    #[test]
+    fn test_link_all_branches() {
+        let mu = 2.0;
+
+        // Log link (link_power = 0)
+        let log_link = TweedieFamily::poisson();
+        assert!((log_link.link(mu) - mu.ln()).abs() < 1e-10);
+
+        // Identity link (link_power = 1)
+        let id_link = TweedieFamily::gaussian();
+        assert!((id_link.link(mu) - mu).abs() < 1e-10);
+
+        // Inverse link (link_power = -1)
+        let inv_link = TweedieFamily::new(2.0, -1.0);
+        assert!((inv_link.link(mu) - 0.5).abs() < 1e-10); // 1/μ
+
+        // General power link (link_power = 0.5)
+        let pow_link = TweedieFamily::new(1.0, 0.5);
+        assert!((pow_link.link(mu) - mu.powf(0.5)).abs() < 1e-10);
+    }
+
+    // === Tests for link_inverse branches ===
+
+    #[test]
+    fn test_link_inverse_all_branches() {
+        let eta = 2.0;
+
+        // Log link (link_power = 0)
+        let log_link = TweedieFamily::poisson();
+        assert!((log_link.link_inverse(eta) - eta.exp()).abs() < 1e-10);
+
+        // Identity link (link_power = 1)
+        let id_link = TweedieFamily::gaussian();
+        assert!((id_link.link_inverse(eta) - eta).abs() < 1e-10);
+
+        // Inverse link (link_power = -1)
+        let inv_link = TweedieFamily::new(2.0, -1.0);
+        assert!((inv_link.link_inverse(eta) - 0.5).abs() < 1e-10); // 1/η
+
+        // General power link (link_power = 0.5)
+        let pow_link = TweedieFamily::new(1.0, 0.5);
+        assert!((pow_link.link_inverse(eta) - eta.powf(2.0)).abs() < 1e-10); // η^(1/0.5)
+    }
+
+    // === Tests for initialize_mu ===
+
+    #[test]
+    fn test_initialize_mu_normal() {
+        let fam = TweedieFamily::gaussian();
+        let y = vec![1.0, 2.0, 3.0, -1.0, 5.0];
+
+        let mu = fam.initialize_mu(&y);
+
+        // For normal, mu should be y
+        assert_eq!(mu.len(), y.len());
+        for i in 0..y.len() {
+            assert!((mu[i] - y[i]).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_initialize_mu_poisson() {
+        let fam = TweedieFamily::poisson();
+        let y = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y_mean = 2.0;
+
+        let mu = fam.initialize_mu(&y);
+
+        // For Poisson, mu should be positive
+        assert_eq!(mu.len(), y.len());
+        for i in 0..y.len() {
+            assert!(mu[i] > 0.0, "mu[{}] should be positive", i);
+        }
+
+        // First observation has y=0, mu should be (0 + 2)/2 = 1.0
+        assert!((mu[0] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_initialize_mu_with_negative() {
+        let fam = TweedieFamily::poisson();
+        let y = vec![-1.0, -2.0, 0.0, 1.0, 2.0];
+        let y_mean: f64 = y.iter().sum::<f64>() / y.len() as f64;
+
+        let mu = fam.initialize_mu(&y);
+
+        // All mu values should be positive for Poisson
+        for i in 0..y.len() {
+            assert!(mu[i] > 0.0, "mu[{}] = {} should be positive", i, mu[i]);
+        }
+    }
+
+    // === Tests for variance branches ===
+
+    #[test]
+    fn test_variance_all_branches() {
+        let mu = 2.0;
+
+        // Normal (var_power = 0)
+        let normal = TweedieFamily::gaussian();
+        assert!((normal.variance(mu) - 1.0).abs() < 1e-10);
+
+        // Poisson (var_power = 1)
+        let poisson = TweedieFamily::poisson();
+        assert!((poisson.variance(mu) - mu).abs() < 1e-10);
+
+        // Gamma (var_power = 2)
+        let gamma = TweedieFamily::gamma();
+        assert!((gamma.variance(mu) - mu * mu).abs() < 1e-10);
+
+        // General (var_power = 3)
+        let ig = TweedieFamily::inverse_gaussian();
+        assert!((ig.variance(mu) - mu.powf(3.0)).abs() < 1e-10);
+    }
+
+    // === Test for GlmFamily trait implementation ===
+
+    #[test]
+    fn test_glm_family_trait() {
+        let fam = TweedieFamily::poisson();
+
+        // Test trait methods work correctly
+        let mu = 2.0;
+        assert!((GlmFamily::variance(&fam, mu) - fam.variance(mu)).abs() < 1e-10);
+        assert!((GlmFamily::link(&fam, mu) - fam.link(mu)).abs() < 1e-10);
+        assert!((GlmFamily::link_inverse(&fam, fam.link(mu)) - mu).abs() < 1e-10);
+        assert!((GlmFamily::link_derivative(&fam, mu) - fam.link_derivative(mu)).abs() < 1e-10);
+    }
+
+    // === Test for deviance with different families ===
+
+    #[test]
+    fn test_deviance_misfit() {
+        let fam = TweedieFamily::gaussian();
+        let y = vec![1.0, 2.0, 3.0];
+        let mu = vec![2.0, 2.0, 2.0]; // Not a perfect fit
+
+        let dev = fam.deviance(&y, &mu);
+        // (1-2)² + (2-2)² + (3-2)² = 1 + 0 + 1 = 2
+        assert!((dev - 2.0).abs() < 1e-10);
+    }
 }

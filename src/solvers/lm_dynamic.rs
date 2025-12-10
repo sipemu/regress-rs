@@ -39,6 +39,7 @@ use crate::solvers::alm::{log_likelihood, AlmDistribution, AlmRegressor, FittedA
 use crate::solvers::lowess::lowess_smooth_weights;
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
 use faer::{Col, Mat};
+use statrs::distribution::{ContinuousCDF, StudentsT};
 
 /// Information criterion type for model weighting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -296,6 +297,8 @@ impl LmDynamicRegressor {
             model_specs,
             pointwise_ic,
             n_features: p,
+            original_x: x.to_owned(),
+            has_intercept: self.options.with_intercept,
         })
     }
 
@@ -479,7 +482,12 @@ pub struct FittedLmDynamic {
     /// Pointwise IC values (n_obs x n_models matrix)
     pointwise_ic: Mat<f64>,
     /// Number of original features
+    #[allow(dead_code)]
     n_features: usize,
+    /// Original X matrix for interval computation
+    original_x: Mat<f64>,
+    /// Whether model has intercept
+    has_intercept: bool,
 }
 
 impl FittedLmDynamic {
@@ -542,6 +550,167 @@ impl FittedLmDynamic {
             None
         }
     }
+
+    /// Compute prediction intervals for dynamic model using the averaged model approach.
+    ///
+    /// Uses the formula: SE = sqrt(MSE * (1 + h)) for prediction intervals
+    /// and SE = sqrt(MSE * h) for confidence intervals, where h is the leverage.
+    fn compute_dynamic_intervals(
+        &self,
+        x_new: &Mat<f64>,
+        predictions: &Col<f64>,
+        interval_type: IntervalType,
+        level: f64,
+    ) -> PredictionResult {
+        let n_new = x_new.nrows();
+        let df = self.result.residual_df() as f64;
+
+        // Invalid cases: return NaN intervals
+        if df <= 0.0 || !self.result.mse.is_finite() || self.result.mse < 0.0 {
+            return self.create_nan_intervals(predictions, n_new);
+        }
+
+        // Compute (X'X)^-1 for the original data
+        let xtx_inv = match self.compute_xtx_inverse() {
+            Some(inv) => inv,
+            None => return self.create_nan_intervals(predictions, n_new),
+        };
+
+        // Compute t-critical value
+        let t_crit = self.compute_t_critical(df, level);
+
+        let mse = self.result.mse;
+        let mut se = Col::zeros(n_new);
+        let mut lower = Col::zeros(n_new);
+        let mut upper = Col::zeros(n_new);
+
+        for i in 0..n_new {
+            // Build observation vector (with intercept if needed)
+            let x0 = self.build_obs_vector(x_new, i);
+
+            // Compute leverage h = x0' * (X'X)^-1 * x0
+            let h = self.compute_leverage(&x0, &xtx_inv);
+
+            // Compute variance based on interval type
+            let var = match interval_type {
+                IntervalType::Confidence => mse * h,
+                IntervalType::Prediction => mse * (1.0 + h),
+            };
+
+            se[i] = if var >= 0.0 { var.sqrt() } else { f64::NAN };
+            let margin = t_crit * se[i];
+            lower[i] = predictions[i] - margin;
+            upper[i] = predictions[i] + margin;
+        }
+
+        PredictionResult::with_intervals(predictions.clone(), lower, upper, se)
+    }
+
+    /// Compute (X'X)^-1 for interval computation.
+    fn compute_xtx_inverse(&self) -> Option<Mat<f64>> {
+        let n = self.original_x.nrows();
+        let p = self.original_x.ncols();
+
+        // Build design matrix with optional intercept
+        let design = if self.has_intercept {
+            let aug_size = p + 1;
+            Mat::from_fn(n, aug_size, |i, j| {
+                if j == 0 {
+                    1.0
+                } else {
+                    self.original_x[(i, j - 1)]
+                }
+            })
+        } else {
+            self.original_x.clone()
+        };
+
+        // Compute X'X
+        let xtx = design.transpose() * &design;
+
+        // Compute inverse using QR decomposition
+        let dim = xtx.nrows();
+        let qr = xtx.qr();
+        let q = qr.compute_Q();
+        let r = qr.R().to_owned();
+
+        // Check for singularity
+        for i in 0..dim {
+            if r[(i, i)].abs() < 1e-10 {
+                return None;
+            }
+        }
+
+        // Solve for inverse
+        let qt = q.transpose().to_owned();
+        let mut inv = Mat::zeros(dim, dim);
+
+        for col in 0..dim {
+            for i in (0..dim).rev() {
+                let mut sum = qt[(i, col)];
+                for j in (i + 1)..dim {
+                    sum -= r[(i, j)] * inv[(j, col)];
+                }
+                inv[(i, col)] = sum / r[(i, i)];
+            }
+        }
+
+        Some(inv)
+    }
+
+    /// Build observation vector (optionally augmented with intercept).
+    fn build_obs_vector(&self, x_new: &Mat<f64>, row: usize) -> Col<f64> {
+        let n_features = x_new.ncols();
+
+        if self.has_intercept {
+            let mut x0 = Col::zeros(n_features + 1);
+            x0[0] = 1.0;
+            for j in 0..n_features {
+                x0[j + 1] = x_new[(row, j)];
+            }
+            x0
+        } else {
+            Col::from_fn(n_features, |j| x_new[(row, j)])
+        }
+    }
+
+    /// Compute leverage h = x0' * (X'X)^-1 * x0.
+    fn compute_leverage(&self, x0: &Col<f64>, xtx_inv: &Mat<f64>) -> f64 {
+        let p = x0.nrows();
+
+        // Compute (X'X)^-1 * x0
+        let mut xtx_inv_x0 = Col::zeros(p);
+        for i in 0..p {
+            let mut sum = 0.0;
+            for j in 0..p {
+                sum += xtx_inv[(i, j)] * x0[j];
+            }
+            xtx_inv_x0[i] = sum;
+        }
+
+        // Compute x0' * ((X'X)^-1 * x0)
+        let mut h = 0.0;
+        for i in 0..p {
+            h += x0[i] * xtx_inv_x0[i];
+        }
+
+        h.max(0.0) // Ensure non-negative
+    }
+
+    /// Compute t-critical value for confidence intervals.
+    fn compute_t_critical(&self, df: f64, level: f64) -> f64 {
+        let t_dist = StudentsT::new(0.0, 1.0, df).expect("valid t-distribution parameters");
+        let alpha = 1.0 - level;
+        t_dist.inverse_cdf(1.0 - alpha / 2.0)
+    }
+
+    /// Create NaN intervals for invalid cases.
+    fn create_nan_intervals(&self, predictions: &Col<f64>, n: usize) -> PredictionResult {
+        let se = Col::from_fn(n, |_| f64::NAN);
+        let lower = Col::from_fn(n, |_| f64::NAN);
+        let upper = Col::from_fn(n, |_| f64::NAN);
+        PredictionResult::with_intervals(predictions.clone(), lower, upper, se)
+    }
 }
 
 impl FittedRegressor for FittedLmDynamic {
@@ -571,16 +740,13 @@ impl FittedRegressor for FittedLmDynamic {
         &self,
         x: &Mat<f64>,
         interval: Option<IntervalType>,
-        _level: f64,
+        level: f64,
     ) -> PredictionResult {
         let predictions = self.predict(x);
 
         match interval {
             None => PredictionResult::point_only(predictions),
-            Some(_) => {
-                // TODO: Implement prediction intervals for dynamic model
-                PredictionResult::point_only(predictions)
-            }
+            Some(interval_type) => self.compute_dynamic_intervals(x, &predictions, interval_type, level),
         }
     }
 }
@@ -833,5 +999,613 @@ mod tests {
             assert!(predictions[i] > 0.0);
             assert!(predictions[i] < 200.0);
         }
+    }
+
+    // === Error Path Tests ===
+
+    #[test]
+    fn test_fit_insufficient_observations() {
+        // Tests lines 184-188: n < 3 error
+        let x = Mat::from_fn(2, 1, |i, _| i as f64);
+        let y = Col::from_fn(2, |i| i as f64);
+
+        let model = LmDynamicRegressor::builder().build();
+        let result = model.fit(&x, &y);
+
+        assert!(result.is_err());
+        match result {
+            Err(RegressionError::InsufficientObservations { needed, got }) => {
+                assert_eq!(needed, 3);
+                assert_eq!(got, 2);
+            }
+            _ => panic!("Expected InsufficientObservations error"),
+        }
+    }
+
+    #[test]
+    fn test_fit_dimension_mismatch() {
+        // Tests Regressor trait: x.nrows() != y.nrows()
+        let x = Mat::from_fn(10, 2, |i, j| (i + j) as f64);
+        let y = Col::from_fn(5, |i| i as f64); // Wrong length
+
+        let model = LmDynamicRegressor::builder().build();
+        let result = model.fit(&x, &y);
+
+        assert!(result.is_err());
+        match result {
+            Err(RegressionError::DimensionMismatch { x_rows, y_len }) => {
+                assert_eq!(x_rows, 10);
+                assert_eq!(y_len, 5);
+            }
+            _ => panic!("Expected DimensionMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_fit_zero_features() {
+        // Tests lines 195-199: no model specs generated (p = 0)
+        let x = Mat::<f64>::zeros(10, 0); // No features
+        let y = Col::from_fn(10, |i| i as f64);
+
+        let model = LmDynamicRegressor::builder().build();
+        let result = model.fit(&x, &y);
+
+        assert!(result.is_err());
+    }
+
+    // === Builder Tests ===
+
+    #[test]
+    fn test_builder_lowess_span_clamping() {
+        // Tests lines 631-633: span is clamped to [0.05, 1.0]
+
+        // Test lower bound clamping
+        let model1 = LmDynamicRegressor::builder().lowess_span(0.01).build();
+        assert_eq!(model1.lowess_span(), Some(0.05));
+
+        // Test upper bound clamping
+        let model2 = LmDynamicRegressor::builder().lowess_span(1.5).build();
+        assert_eq!(model2.lowess_span(), Some(1.0));
+
+        // Test normal value
+        let model3 = LmDynamicRegressor::builder().lowess_span(0.4).build();
+        assert_eq!(model3.lowess_span(), Some(0.4));
+    }
+
+    #[test]
+    fn test_builder_no_smoothing() {
+        // Tests lines 637-639: disable smoothing
+        let model = LmDynamicRegressor::builder().no_smoothing().build();
+
+        assert_eq!(model.lowess_span(), None);
+    }
+
+    #[test]
+    fn test_fit_without_smoothing() {
+        // Verify model works without LOWESS smoothing
+        let x = Mat::from_fn(30, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(30, |i| 2.0 + 1.5 * (i + 1) as f64);
+
+        let model = LmDynamicRegressor::builder()
+            .no_smoothing()
+            .with_intercept(true)
+            .build();
+
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // No smoothed weights should exist
+        assert!(fitted.smoothed_weights().is_none());
+
+        // Model weights should still be normalized
+        for i in 0..30 {
+            let sum: f64 = (0..fitted.model_weights().ncols())
+                .map(|j| fitted.model_weights()[(i, j)])
+                .sum();
+            assert!((sum - 1.0).abs() < 1e-6);
+        }
+    }
+
+    // === Edge Case Tests ===
+
+    #[test]
+    fn test_fit_with_laplace_distribution() {
+        // Tests non-Normal distribution (Laplace)
+        let x = Mat::from_fn(50, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(50, |i| {
+            let t = (i + 1) as f64;
+            2.0 + 1.5 * t + if i % 3 == 0 { 5.0 } else { 0.0 } // Some outliers
+        });
+
+        let model = LmDynamicRegressor::builder()
+            .distribution(AlmDistribution::Laplace)
+            .with_intercept(true)
+            .build();
+
+        assert_eq!(model.distribution(), AlmDistribution::Laplace);
+
+        let result = model.fit(&x, &y);
+        assert!(result.is_ok());
+
+        let fitted = result.unwrap();
+        assert_eq!(fitted.distribution(), AlmDistribution::Laplace);
+    }
+
+    #[test]
+    fn test_fit_no_intercept() {
+        // Tests fitting without intercept
+        let x = Mat::from_fn(30, 2, |i, j| ((i + 1) * (j + 1)) as f64);
+        let y = Col::from_fn(30, |i| {
+            let i_f = (i + 1) as f64;
+            2.0 * i_f + 3.0 * i_f * 2.0
+        });
+
+        let model = LmDynamicRegressor::builder().with_intercept(false).build();
+
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // No intercept should be present
+        assert!(fitted.result().intercept.is_none());
+
+        // Dynamic coefficients should have 2 columns (no intercept column)
+        assert_eq!(fitted.dynamic_coefficients().ncols(), 2);
+    }
+
+    #[test]
+    fn test_dynamic_coefficient_mapping() {
+        // Test that coefficients are correctly mapped from subset models
+        let x = Mat::from_fn(30, 2, |i, j| {
+            if j == 0 {
+                i as f64
+            } else {
+                (i as f64).sin() * 10.0
+            }
+        });
+        let y = Col::from_fn(30, |i| 1.0 + 2.0 * i as f64 + 3.0 * (i as f64).sin() * 10.0);
+
+        let model = LmDynamicRegressor::builder()
+            .max_models(7) // All 2^2 - 1 = 3 models for 2 features
+            .with_intercept(true)
+            .build();
+
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // Dynamic coefficients should have 3 columns: intercept + 2 features
+        assert_eq!(fitted.dynamic_coefficients().ncols(), 3);
+
+        // All coefficients should be finite
+        for i in 0..30 {
+            for j in 0..3 {
+                assert!(
+                    fitted.dynamic_coefficients()[(i, j)].is_finite(),
+                    "Dynamic coef[{},{}] should be finite",
+                    i,
+                    j
+                );
+            }
+        }
+    }
+
+    // === Information Criterion Tests ===
+
+    #[test]
+    fn test_information_criterion_aicc_small_sample() {
+        // Test AICc correction when n - k - 1 <= 0
+        let log_lik = -10.0;
+        let k = 5;
+        let n = 5; // n - k - 1 = -1 (edge case)
+
+        let aicc = InformationCriterion::AICc.compute(log_lik, k, n);
+        let aic = InformationCriterion::AIC.compute(log_lik, k, n);
+
+        // When n - k - 1 <= 0, AICc should equal AIC
+        assert!((aicc - aic).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_information_criterion_bic() {
+        // Test BIC computation
+        let log_lik = -15.0;
+        let k = 4;
+        let n = 50;
+
+        let bic = InformationCriterion::BIC.compute(log_lik, k, n);
+        // BIC = k*ln(n) - 2*LL = 4*ln(50) + 30
+        let expected = 4.0 * (50.0_f64).ln() + 30.0;
+        assert!((bic - expected).abs() < 1e-10);
+    }
+
+    // === Accessor Tests ===
+
+    #[test]
+    fn test_coefficient_at() {
+        let x = Mat::from_fn(30, 2, |i, j| (i + j) as f64 * 0.1);
+        let y = Col::from_fn(30, |i| i as f64);
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // Valid indices
+        assert!(fitted.coefficient_at(0, 0).is_some());
+        assert!(fitted.coefficient_at(29, 2).is_some());
+
+        // Invalid indices
+        assert!(fitted.coefficient_at(30, 0).is_none()); // Row out of bounds
+        assert!(fitted.coefficient_at(0, 10).is_none()); // Col out of bounds
+    }
+
+    #[test]
+    fn test_coefficients_at() {
+        let x = Mat::from_fn(30, 2, |i, j| (i + j) as f64 * 0.1);
+        let y = Col::from_fn(30, |i| i as f64);
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let coefs = fitted.coefficients_at(15);
+        assert!(coefs.is_some());
+        let coefs = coefs.unwrap();
+        assert_eq!(coefs.nrows(), 3); // intercept + 2 features
+
+        // Invalid index
+        assert!(fitted.coefficients_at(100).is_none());
+    }
+
+    // === Prediction Tests ===
+
+    #[test]
+    fn test_predict_with_interval_none() {
+        // Tests predict_with_interval with None returns point only
+        let x = Mat::from_fn(30, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(30, |i| 2.0 + 1.5 * (i + 1) as f64);
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 31) as f64);
+        let result = fitted.predict_with_interval(&x_new, None, 0.95);
+
+        // Should have predictions
+        assert_eq!(result.fit.nrows(), 5);
+        for i in 0..5 {
+            assert!(result.fit[i].is_finite());
+        }
+    }
+
+    #[test]
+    fn test_model_weights_normalization() {
+        // Test that model weights are properly normalized to sum to 1
+        let x = Mat::from_fn(40, 2, |i, j| (i + j) as f64 * 0.1);
+        let y = Col::from_fn(40, |i| i as f64 + (i as f64).sin());
+
+        let model = LmDynamicRegressor::builder()
+            .max_models(3)
+            .with_intercept(true)
+            .build();
+
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // Each row should sum to 1
+        for i in 0..40 {
+            let row_sum: f64 = (0..fitted.model_weights().ncols())
+                .map(|j| fitted.model_weights()[(i, j)])
+                .sum();
+            assert!(
+                (row_sum - 1.0).abs() < 1e-6,
+                "Row {} weights sum to {} instead of 1.0",
+                i,
+                row_sum
+            );
+
+            // All weights should be non-negative
+            for j in 0..fitted.model_weights().ncols() {
+                assert!(
+                    fitted.model_weights()[(i, j)] >= 0.0,
+                    "Weight[{},{}] = {} is negative",
+                    i,
+                    j,
+                    fitted.model_weights()[(i, j)]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_pointwise_ic_dimensions() {
+        let x = Mat::from_fn(30, 2, |i, j| (i + j) as f64 * 0.1);
+        let y = Col::from_fn(30, |i| i as f64);
+
+        let model = LmDynamicRegressor::builder()
+            .max_models(3)
+            .with_intercept(true)
+            .build();
+
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // Pointwise IC should be n_obs × n_models
+        let ic = fitted.pointwise_ic();
+        assert_eq!(ic.nrows(), 30);
+        assert_eq!(ic.ncols(), fitted.model_specs().len());
+    }
+
+    #[test]
+    fn test_distribution_accessor() {
+        let model = LmDynamicRegressor::builder()
+            .distribution(AlmDistribution::Laplace)
+            .build();
+
+        let x = Mat::from_fn(30, 1, |i, _| i as f64);
+        let y = Col::from_fn(30, |i| i as f64);
+
+        let fitted = model.fit(&x, &y).expect("Should fit");
+        assert_eq!(fitted.distribution(), AlmDistribution::Laplace);
+    }
+
+    #[test]
+    fn test_max_models_limit() {
+        // Verify max_models actually limits the number of models
+        let x = Mat::from_fn(30, 5, |i, j| (i + j) as f64 * 0.1);
+        let y = Col::from_fn(30, |i| i as f64);
+
+        let model = LmDynamicRegressor::builder()
+            .max_models(5) // Limit to 5 models instead of 2^5-1=31
+            .build();
+
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // Should have at most 5 models
+        assert!(fitted.model_specs().len() <= 5);
+    }
+
+    // === Prediction Interval Tests ===
+
+    #[test]
+    fn test_predict_with_prediction_interval() {
+        // Basic prediction interval test
+        let x = Mat::from_fn(50, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(50, |i| {
+            let t = (i + 1) as f64;
+            2.0 + 1.5 * t + (t * 0.1).sin() * 0.5
+        });
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 51) as f64);
+        let result = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.95);
+
+        // Should have predictions and intervals
+        assert_eq!(result.fit.nrows(), 5);
+        assert_eq!(result.lower.nrows(), 5);
+        assert_eq!(result.upper.nrows(), 5);
+        assert_eq!(result.se.nrows(), 5);
+
+        for i in 0..5 {
+            assert!(result.fit[i].is_finite(), "Prediction should be finite");
+            assert!(result.lower[i].is_finite(), "Lower bound should be finite");
+            assert!(result.upper[i].is_finite(), "Upper bound should be finite");
+            assert!(result.se[i].is_finite(), "SE should be finite");
+            assert!(
+                result.lower[i] < result.fit[i],
+                "Lower bound should be below prediction"
+            );
+            assert!(
+                result.upper[i] > result.fit[i],
+                "Upper bound should be above prediction"
+            );
+            assert!(result.se[i] > 0.0, "SE should be positive");
+        }
+    }
+
+    #[test]
+    fn test_predict_with_confidence_interval() {
+        // Confidence interval test
+        let x = Mat::from_fn(50, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(50, |i| {
+            let t = (i + 1) as f64;
+            2.0 + 1.5 * t + (t * 0.1).sin() * 0.5
+        });
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 51) as f64);
+        let result = fitted.predict_with_interval(&x_new, Some(IntervalType::Confidence), 0.95);
+
+        for i in 0..5 {
+            assert!(result.lower[i].is_finite());
+            assert!(result.upper[i].is_finite());
+            assert!(result.lower[i] < result.fit[i]);
+            assert!(result.upper[i] > result.fit[i]);
+        }
+    }
+
+    #[test]
+    fn test_prediction_interval_wider_than_confidence() {
+        // Prediction intervals should be wider than confidence intervals
+        let x = Mat::from_fn(50, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(50, |i| {
+            let t = (i + 1) as f64;
+            2.0 + 1.5 * t + (t * 0.1).sin() * 0.5
+        });
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let x_new = Mat::from_fn(5, 1, |i, _| (i + 51) as f64);
+
+        let pred = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.95);
+        let conf = fitted.predict_with_interval(&x_new, Some(IntervalType::Confidence), 0.95);
+
+        for i in 0..5 {
+            assert!(
+                pred.se[i] > conf.se[i],
+                "Prediction SE {} should be > Confidence SE {}",
+                pred.se[i],
+                conf.se[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_different_confidence_levels() {
+        // Higher confidence level should produce wider intervals
+        let x = Mat::from_fn(50, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(50, |i| {
+            let t = (i + 1) as f64;
+            2.0 + 1.5 * t + (t * 0.1).sin() * 0.5
+        });
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let x_new = Mat::from_fn(3, 1, |i, _| (i + 51) as f64);
+
+        let result_90 = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.90);
+        let result_95 = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.95);
+        let result_99 = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.99);
+
+        for i in 0..3 {
+            let width_90 = result_90.upper[i] - result_90.lower[i];
+            let width_95 = result_95.upper[i] - result_95.lower[i];
+            let width_99 = result_99.upper[i] - result_99.lower[i];
+
+            assert!(
+                width_95 > width_90,
+                "95% interval should be wider than 90%: {} vs {}",
+                width_95,
+                width_90
+            );
+            assert!(
+                width_99 > width_95,
+                "99% interval should be wider than 95%: {} vs {}",
+                width_99,
+                width_95
+            );
+        }
+    }
+
+    #[test]
+    fn test_interval_no_intercept() {
+        // Test intervals work without intercept using non-collinear data
+        let x = Mat::from_fn(50, 2, |i, j| {
+            let i_f = (i + 1) as f64;
+            if j == 0 {
+                i_f
+            } else {
+                (i_f * 0.1).sin() * 10.0
+            }
+        });
+        let y = Col::from_fn(50, |i| {
+            let i_f = (i + 1) as f64;
+            2.0 * i_f + 3.0 * (i_f * 0.1).sin() * 10.0
+        });
+
+        let model = LmDynamicRegressor::builder().with_intercept(false).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let x_new = Mat::from_fn(5, 2, |i, j| {
+            let i_f = (i + 51) as f64;
+            if j == 0 {
+                i_f
+            } else {
+                (i_f * 0.1).sin() * 10.0
+            }
+        });
+        let result = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.95);
+
+        for i in 0..5 {
+            assert!(result.lower[i].is_finite(), "Lower should be finite");
+            assert!(result.upper[i].is_finite(), "Upper should be finite");
+        }
+    }
+
+    #[test]
+    fn test_interval_multiple_features() {
+        // Test intervals with multiple features
+        let x = Mat::from_fn(60, 3, |i, j| {
+            let i_f = (i + 1) as f64;
+            match j {
+                0 => i_f,
+                1 => i_f.powi(2) * 0.01,
+                _ => (i_f * 0.1).sin(),
+            }
+        });
+        let y = Col::from_fn(60, |i| {
+            let t = (i + 1) as f64;
+            1.0 + 0.5 * t + 0.1 * t.powi(2) * 0.01 + 0.3 * (t * 0.1).sin()
+        });
+
+        let model = LmDynamicRegressor::builder()
+            .with_intercept(true)
+            .max_models(7)
+            .build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        let x_new = Mat::from_fn(5, 3, |i, j| {
+            let i_f = (i + 61) as f64;
+            match j {
+                0 => i_f,
+                1 => i_f.powi(2) * 0.01,
+                _ => (i_f * 0.1).sin(),
+            }
+        });
+
+        let result = fitted.predict_with_interval(&x_new, Some(IntervalType::Prediction), 0.95);
+
+        for i in 0..5 {
+            assert!(result.lower[i].is_finite());
+            assert!(result.upper[i].is_finite());
+            assert!(result.se[i] > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_interval_compute_xtx_inverse() {
+        // Direct test for compute_xtx_inverse via prediction intervals
+        let x = Mat::from_fn(30, 1, |i, _| (i + 1) as f64);
+        let y = Col::from_fn(30, |i| 2.0 + 1.5 * (i + 1) as f64);
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // Request intervals - this exercises compute_xtx_inverse
+        let x_new = Mat::from_fn(3, 1, |i, _| (i + 31) as f64);
+        let result = fitted.predict_with_interval(&x_new, Some(IntervalType::Confidence), 0.95);
+
+        // Should produce valid intervals if XTX inverse is computed correctly
+        for i in 0..3 {
+            assert!(result.se[i].is_finite() && result.se[i] > 0.0);
+        }
+    }
+
+    #[test]
+    fn test_interval_extrapolation_leverage() {
+        // Extrapolation should have higher leverage (wider intervals)
+        let x = Mat::from_fn(50, 1, |i, _| (i + 1) as f64); // x from 1 to 50
+        let y = Col::from_fn(50, |i| 2.0 + 1.5 * (i + 1) as f64);
+
+        let model = LmDynamicRegressor::builder().with_intercept(true).build();
+        let fitted = model.fit(&x, &y).expect("Should fit");
+
+        // Near interpolation (within data range)
+        let x_interp = Mat::from_fn(1, 1, |_, _| 25.0);
+        let result_interp =
+            fitted.predict_with_interval(&x_interp, Some(IntervalType::Confidence), 0.95);
+
+        // Extrapolation (far outside data range)
+        let x_extrap = Mat::from_fn(1, 1, |_, _| 100.0);
+        let result_extrap =
+            fitted.predict_with_interval(&x_extrap, Some(IntervalType::Confidence), 0.95);
+
+        let se_interp = result_interp.se[0];
+        let se_extrap = result_extrap.se[0];
+
+        // Extrapolation should have larger SE due to higher leverage
+        assert!(
+            se_extrap > se_interp,
+            "Extrapolation SE {} should be > interpolation SE {}",
+            se_extrap,
+            se_interp
+        );
     }
 }

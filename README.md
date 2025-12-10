@@ -616,6 +616,35 @@ let model = RidgeRegressor::builder()
     .build();
 ```
 
+## Examples
+
+The `examples/` directory contains runnable examples demonstrating each regression method:
+
+| Example | Description |
+|---------|-------------|
+| `ols.rs` | Ordinary Least Squares regression |
+| `wls.rs` | Weighted Least Squares regression |
+| `ridge.rs` | Ridge regression (L2 regularization) |
+| `elastic_net.rs` | Elastic Net (L1 + L2 regularization) |
+| `rls.rs` | Recursive Least Squares with online learning |
+| `bls.rs` | Bounded Least Squares / NNLS |
+| `tweedie.rs` | Tweedie GLM (Gaussian, Poisson, Gamma) |
+| `poisson.rs` | Poisson GLM for count data |
+| `negative_binomial.rs` | Negative Binomial GLM for overdispersed counts |
+| `binomial.rs` | Binomial GLM / Logistic regression |
+| `alm.rs` | Augmented Linear Model (24+ distributions) |
+| `lm_dynamic.rs` | Dynamic linear model with time-varying coefficients |
+| `lowess.rs` | LOWESS smoothing |
+| `aid.rs` | Automatic Intermittent Demand classification |
+| `collinearity_intervals.rs` | Handling collinearity in prediction intervals |
+
+Run an example with:
+
+```bash
+cargo run --example ols
+cargo run --example poisson
+```
+
 ## Validation
 
 This library is validated against R's statistical functions:
