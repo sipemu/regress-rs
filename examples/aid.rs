@@ -17,7 +17,7 @@
 //!
 //! Run with: `cargo run --example aid`
 
-use anofox_regression::solvers::{AidClassifier, AidClassifierBuilder, DemandType};
+use anofox_regression::solvers::{AidClassifier, DemandType};
 use faer::Col;
 
 fn main() {
