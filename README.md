@@ -19,11 +19,19 @@ This library provides sklearn-style regression estimators with full statistical 
   - Elastic Net (L1 + L2 regularization)
   - Recursive Least Squares (RLS) with online learning
   - Bounded Least Squares (BLS/NNLS) with box constraints
+  - Dynamic Linear Model (LmDynamic) with time-varying coefficients
   - Tweedie GLM (Gaussian, Poisson, Gamma, Inverse-Gaussian, Compound Poisson-Gamma)
   - Poisson GLM (Log, Identity, Sqrt links) with offset support
   - Negative Binomial GLM (overdispersed count data with theta estimation)
   - Binomial GLM (Logistic, Probit, Complementary log-log)
   - Augmented Linear Model (ALM) with 24+ distributions (Normal, Laplace, Student-t, Gamma, Beta, etc.)
+
+- **Smoothing & Classification**
+  - LOWESS (Locally Weighted Scatterplot Smoothing)
+  - AID (Automatic Identification of Demand) classifier for demand pattern classification
+
+- **Loss Functions**
+  - MAE, MSE, RMSE, MAPE, sMAPE, MASE, pinball loss
 
 - **Statistical Inference**
   - Coefficient standard errors, t-statistics, and p-values
