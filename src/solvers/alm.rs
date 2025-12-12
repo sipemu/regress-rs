@@ -185,11 +185,11 @@ impl AlmDistribution {
             AlmDistribution::InverseGaussian => LinkFunction::Log,
             AlmDistribution::Exponential => LinkFunction::Log,
             AlmDistribution::Beta => LinkFunction::Logit,
-            AlmDistribution::LogitNormal => LinkFunction::Logit,
+            AlmDistribution::LogitNormal => LinkFunction::Identity, // models logit-scale location directly
             AlmDistribution::Poisson => LinkFunction::Log,
             AlmDistribution::NegativeBinomial => LinkFunction::Log,
             AlmDistribution::Binomial => LinkFunction::Logit,
-            AlmDistribution::Geometric => LinkFunction::Logit,
+            AlmDistribution::Geometric => LinkFunction::Log, // models mean λ = (1-p)/p
             AlmDistribution::CumulativeLogistic => LinkFunction::Logit,
             AlmDistribution::CumulativeNormal => LinkFunction::Probit,
         }
@@ -350,21 +350,28 @@ fn ll_asymmetric_laplace(y: &Col<f64>, mu: &Col<f64>, scale: f64, alpha: f64) ->
 }
 
 fn ll_generalised_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64, shape: f64) -> f64 {
+    // Generalized Normal (Exponential Power) Distribution
+    // PDF: f(x; μ, α, β) = (β / (2α·Γ(1/β))) · exp(-(|x-μ|/α)^β)
+    // Log-lik: log(β/(2α)) - ln_gamma(1/β) - |z|^β  where z = (x-μ)/α
     let n = y.nrows();
     (0..n)
         .map(|i| {
             let z = ((y[i] - mu[i]) / scale).abs();
-            (shape / (2.0 * scale)).ln() - ln_gamma(1.0 / shape) - 0.5 * z.powf(shape)
+            (shape / (2.0 * scale)).ln() - ln_gamma(1.0 / shape) - z.powf(shape)
         })
         .sum()
 }
 
 fn ll_s_distribution(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    // S Distribution (greybox parameterization)
+    // PDF: f(y; μ, s) = (1 / (4s²)) · exp(-√|y - μ| / s)
+    // Log-lik: -log(4) - 2·log(s) - √|y - μ| / s
     let n = y.nrows();
+    let scale_sq = scale * scale;
     (0..n)
         .map(|i| {
-            let z = ((y[i] - mu[i]) / scale).abs();
-            (0.25 / scale).ln() - ln_gamma(2.0) - 0.5 * z.sqrt()
+            let abs_resid = (y[i] - mu[i]).abs();
+            -(4.0 * scale_sq).ln() - abs_resid.sqrt() / scale
         })
         .sum()
 }
@@ -398,6 +405,8 @@ fn ll_log_laplace(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
 }
 
 fn ll_log_s(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    // Log-S distribution: log(Y) follows S distribution
+    // Log-lik: log(1/(4α)) - y.ln() - √|z|  where z = (log(y) - log(μ))/α
     let n = y.nrows();
     let mut ll = 0.0;
     for i in 0..n {
@@ -405,12 +414,14 @@ fn ll_log_s(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
             return f64::NEG_INFINITY;
         }
         let z = (y[i].ln() - mu[i].ln()).abs() / scale;
-        ll += (0.25 / scale).ln() - ln_gamma(2.0) - y[i].ln() - 0.5 * z.sqrt();
+        ll += (0.25 / scale).ln() - y[i].ln() - z.sqrt();
     }
     ll
 }
 
 fn ll_log_generalised_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64, shape: f64) -> f64 {
+    // Log-Generalised Normal: log(Y) follows Generalized Normal distribution
+    // Log-lik: log(β/(2α)) - ln_gamma(1/β) - y.ln() - |z|^β  where z = (log(y) - log(μ))/α
     let n = y.nrows();
     let mut ll = 0.0;
     for i in 0..n {
@@ -418,8 +429,7 @@ fn ll_log_generalised_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64, shape: f64
             return f64::NEG_INFINITY;
         }
         let z = (y[i].ln() - mu[i].ln()).abs() / scale;
-        ll +=
-            (shape / (2.0 * scale)).ln() - ln_gamma(1.0 / shape) - y[i].ln() - 0.5 * z.powf(shape);
+        ll += (shape / (2.0 * scale)).ln() - ln_gamma(1.0 / shape) - y[i].ln() - z.powf(shape);
     }
     ll
 }
@@ -538,17 +548,19 @@ fn ll_beta(y: &Col<f64>, mu: &Col<f64>, phi: f64) -> f64 {
 }
 
 fn ll_logit_normal(y: &Col<f64>, mu: &Col<f64>, scale: f64) -> f64 {
+    // mu is the logit-scale location parameter (not a probability)
+    // y is in (0,1), logit(y) ~ Normal(mu, scale^2)
     let n = y.nrows();
     let sigma2 = scale * scale;
     let mut ll = 0.0;
     for i in 0..n {
-        if y[i] <= 0.0 || y[i] >= 1.0 || mu[i] <= 0.0 || mu[i] >= 1.0 {
+        if y[i] <= 0.0 || y[i] >= 1.0 {
             return f64::NEG_INFINITY;
         }
         let logit_y = (y[i] / (1.0 - y[i])).ln();
-        let logit_mu = (mu[i] / (1.0 - mu[i])).ln();
+        // mu[i] is already on logit scale (the location parameter)
         ll += -0.5 * (2.0 * PI * sigma2).ln()
-            - (logit_y - logit_mu).powi(2) / (2.0 * sigma2)
+            - (logit_y - mu[i]).powi(2) / (2.0 * sigma2)
             - y[i].ln()
             - (1.0 - y[i]).ln();
     }
@@ -594,11 +606,15 @@ fn ll_binomial(y: &Col<f64>, mu: &Col<f64>, n_trials: f64) -> f64 {
 }
 
 fn ll_geometric(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    // mu is the mean (expected number of failures before first success)
+    // For geometric distribution: E[Y] = (1-p)/p = λ, so p = 1/(1+λ)
+    // PMF: P(Y=k) = p * (1-p)^k
     let n = y.nrows();
     (0..n)
         .map(|i| {
-            let p = mu[i].clamp(1e-10, 1.0 - 1e-10);
-            let k = y[i].round().max(0.0);
+            let lambda = mu[i].max(1e-10); // mean (number of failures)
+            let p = 1.0 / (1.0 + lambda); // success probability
+            let k = y[i].round().max(0.0); // number of failures
             p.ln() + k * (1.0 - p).ln()
         })
         .sum()
@@ -668,9 +684,18 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
             (rss / df).sqrt()
         }
 
-        AlmDistribution::Laplace | AlmDistribution::LogLaplace => {
+        AlmDistribution::Laplace => {
             // MLE for b: mean absolute deviation
             let sad: f64 = (0..n).map(|i| (y[i] - mu[i]).abs()).sum();
+            sad / n as f64
+        }
+
+        AlmDistribution::LogLaplace => {
+            // MLE for b: mean absolute deviation on log scale
+            let sad: f64 = (0..n)
+                .filter(|&i| y[i] > 0.0 && mu[i] > 0.0)
+                .map(|i| (y[i].ln() - mu[i].ln()).abs())
+                .sum();
             sad / n as f64
         }
 
@@ -683,10 +708,8 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
             mad / 0.6745 // Scale factor for Normal
         }
 
-        AlmDistribution::LogNormal
-        | AlmDistribution::LogGeneralisedNormal
-        | AlmDistribution::LogitNormal => {
-            // Scale on log scale
+        AlmDistribution::LogNormal => {
+            // Scale on log scale: sigma = sqrt(sum((log(y) - log(mu))^2) / df)
             let rss: f64 = (0..n)
                 .filter(|&i| y[i] > 0.0 && mu[i] > 0.0)
                 .map(|i| (y[i].ln() - mu[i].ln()).powi(2))
@@ -694,15 +717,55 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
             (rss / df).sqrt()
         }
 
+        AlmDistribution::LogitNormal => {
+            // LogitNormal: mu is on logit scale, compute residuals as logit(y) - mu
+            let rss: f64 = (0..n)
+                .filter(|&i| y[i] > 0.0 && y[i] < 1.0)
+                .map(|i| {
+                    let yi = y[i].clamp(0.001, 0.999);
+                    let logit_y = (yi / (1.0 - yi)).ln();
+                    (logit_y - mu[i]).powi(2)
+                })
+                .sum();
+            (rss / df).sqrt()
+        }
+
+        AlmDistribution::S => {
+            // S distribution scale: ŝ = (1/2T) · Σ√|yₜ - μₜ| (HAM-based)
+            let ham: f64 = (0..n).map(|i| (y[i] - mu[i]).abs().sqrt()).sum();
+            (ham / (2.0 * n as f64)).max(1e-10)
+        }
+
+        AlmDistribution::LogS => {
+            // Log-S distribution scale: same formula on log scale
+            let ham: f64 = (0..n)
+                .filter(|&i| y[i] > 0.0 && mu[i] > 0.0)
+                .map(|i| (y[i].ln() - mu[i].ln()).abs().sqrt())
+                .sum();
+            (ham / (2.0 * n as f64)).max(1e-10)
+        }
+
         AlmDistribution::AsymmetricLaplace
         | AlmDistribution::GeneralisedNormal
-        | AlmDistribution::S
-        | AlmDistribution::LogS
         | AlmDistribution::BoxCoxNormal => {
             // Use MAD-based estimate
             let mut abs_residuals: Vec<f64> = (0..n).map(|i| (y[i] - mu[i]).abs()).collect();
             abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             abs_residuals[n / 2] / 0.6745
+        }
+
+        AlmDistribution::LogGeneralisedNormal => {
+            // Use MAD-based estimate on log scale
+            let mut abs_residuals: Vec<f64> = (0..n)
+                .filter(|&i| y[i] > 0.0 && mu[i] > 0.0)
+                .map(|i| (y[i].ln() - mu[i].ln()).abs())
+                .collect();
+            abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            if abs_residuals.is_empty() {
+                1.0
+            } else {
+                abs_residuals[abs_residuals.len() / 2] / 0.6745
+            }
         }
 
         // For discrete distributions, scale is typically 1 or not used
@@ -1039,22 +1102,31 @@ impl AlmRegressor {
         let p = x.ncols();
 
         // Transform y for initialization based on link function
-        let y_init: Col<f64> = match self.link {
-            LinkFunction::Identity => y.clone(),
-            LinkFunction::Log => Col::from_fn(n, |i| if y[i] > 0.0 { y[i].ln() } else { 0.0 }),
-            LinkFunction::Logit => Col::from_fn(n, |i| {
-                let yi = y[i].clamp(0.01, 0.99);
+        // Special case: LogitNormal uses Identity link but models logit(y)
+        let y_init: Col<f64> = if matches!(self.distribution, AlmDistribution::LogitNormal) {
+            // For LogitNormal, we model logit(y) directly, so initialize with logit(y)
+            Col::from_fn(n, |i| {
+                let yi = y[i].clamp(0.001, 0.999);
                 (yi / (1.0 - yi)).ln()
-            }),
-            LinkFunction::Probit => Col::from_fn(n, |i| probit(y[i].clamp(0.01, 0.99))),
-            LinkFunction::Inverse => {
-                Col::from_fn(n, |i| if y[i] != 0.0 { 1.0 / y[i] } else { 1.0 })
+            })
+        } else {
+            match self.link {
+                LinkFunction::Identity => y.clone(),
+                LinkFunction::Log => Col::from_fn(n, |i| if y[i] > 0.0 { y[i].ln() } else { 0.0 }),
+                LinkFunction::Logit => Col::from_fn(n, |i| {
+                    let yi = y[i].clamp(0.01, 0.99);
+                    (yi / (1.0 - yi)).ln()
+                }),
+                LinkFunction::Probit => Col::from_fn(n, |i| probit(y[i].clamp(0.01, 0.99))),
+                LinkFunction::Inverse => {
+                    Col::from_fn(n, |i| if y[i] != 0.0 { 1.0 / y[i] } else { 1.0 })
+                }
+                LinkFunction::Sqrt => Col::from_fn(n, |i| y[i].max(0.0).sqrt()),
+                LinkFunction::Cloglog => Col::from_fn(n, |i| {
+                    let yi = y[i].clamp(0.01, 0.99);
+                    (-(1.0 - yi).ln()).ln()
+                }),
             }
-            LinkFunction::Sqrt => Col::from_fn(n, |i| y[i].max(0.0).sqrt()),
-            LinkFunction::Cloglog => Col::from_fn(n, |i| {
-                let yi = y[i].clamp(0.01, 0.99);
-                (-(1.0 - yi).ln()).ln()
-            }),
         };
 
         // Solve OLS using normal equations with regularization for numerical stability
@@ -1164,10 +1236,14 @@ impl AlmRegressor {
         for i in 0..n {
             mu[i] = self.link.inverse(eta[i]);
             // Ensure valid range for certain distributions
+            // Note: LogitNormal uses Identity link where mu is on logit scale (unbounded)
+            // so we don't clamp mu for LogitNormal even though y is in (0,1)
             if self.distribution.requires_positive() {
                 mu[i] = mu[i].max(1e-10);
             }
-            if self.distribution.requires_unit_interval() {
+            if self.distribution.requires_unit_interval()
+                && !matches!(self.distribution, AlmDistribution::LogitNormal)
+            {
                 mu[i] = mu[i].clamp(1e-10, 1.0 - 1e-10);
             }
         }
@@ -1194,9 +1270,14 @@ impl AlmRegressor {
 
             // For Laplace and other robust distributions, use special weights
             let weight = match self.distribution {
-                AlmDistribution::Laplace | AlmDistribution::LogLaplace => {
+                AlmDistribution::Laplace => {
                     // For LAD: w_i = 1 / |y_i - mu_i| (iteratively reweighted)
                     let abs_resid = (y[i] - mu[i]).abs().max(1e-6);
+                    1.0 / abs_resid
+                }
+                AlmDistribution::LogLaplace => {
+                    // For Log-LAD: weights on log scale
+                    let abs_resid = (y[i].ln() - mu[i].ln()).abs().max(1e-6);
                     1.0 / abs_resid
                 }
                 AlmDistribution::AsymmetricLaplace => {
@@ -1218,6 +1299,19 @@ impl AlmRegressor {
                     let z_sq = (resid / scale_est).powi(2);
                     (df + 1.0) / (df + z_sq)
                 }
+                AlmDistribution::S | AlmDistribution::LogS => {
+                    // S distribution (greybox parameterization) weights
+                    // Score: ∂log f/∂μ ∝ sign(y-μ) / √|y-μ|
+                    // Weight proportional to 1/|y-μ| for IRLS stability
+                    let abs_resid = (y[i] - mu[i]).abs().max(1e-6);
+                    1.0 / abs_resid
+                }
+                AlmDistribution::GeneralisedNormal | AlmDistribution::LogGeneralisedNormal => {
+                    // Generalized Normal weights: proportional to |y-μ|^(β-2)
+                    let shape = self.extra_parameter.unwrap_or(2.0);
+                    let abs_resid = (y[i] - mu[i]).abs().max(1e-6);
+                    abs_resid.powf(shape - 2.0).max(1e-10)
+                }
                 _ => {
                     // Standard GLM weight: d_mu^2 / V(mu)
                     (d_mu * d_mu / v).max(1e-10)
@@ -1227,7 +1321,36 @@ impl AlmRegressor {
             weights[i] = weight;
 
             // Working response: z = eta + (y - mu) / d_mu
-            z[i] = eta[i] + (y[i] - mu[i]) / d_mu;
+            // Special cases for transformed-scale distributions
+            let response = match self.distribution {
+                AlmDistribution::LogitNormal => {
+                    // LogitNormal models logit(y), so use logit(y) as response
+                    let yi = y[i].clamp(0.001, 0.999);
+                    (yi / (1.0 - yi)).ln() // logit(y)
+                }
+                AlmDistribution::LogLaplace
+                | AlmDistribution::LogS
+                | AlmDistribution::LogGeneralisedNormal => {
+                    // Log-domain distributions: use log(y) directly as response
+                    // z = log(y) for these distributions since they model log(Y)
+                    y[i].max(1e-10).ln()
+                }
+                _ => y[i],
+            };
+            // For log-domain distributions with Log link, eta = log(mu), d_mu = mu
+            // Working response: z = eta + (log(y) - eta) / 1 = log(y)
+            // For other distributions: z = eta + (y - mu) / d_mu
+            z[i] = if matches!(
+                self.distribution,
+                AlmDistribution::LogLaplace
+                    | AlmDistribution::LogS
+                    | AlmDistribution::LogGeneralisedNormal
+                    | AlmDistribution::LogitNormal
+            ) {
+                response // These are already on the transformed scale
+            } else {
+                eta[i] + (response - mu[i]) / d_mu
+            };
         }
 
         (weights, z)
@@ -2786,7 +2909,7 @@ mod tests {
         assert_eq!(AlmDistribution::Beta.canonical_link(), LinkFunction::Logit);
         assert_eq!(
             AlmDistribution::LogitNormal.canonical_link(),
-            LinkFunction::Logit
+            LinkFunction::Identity // models logit-scale location directly
         );
         assert_eq!(AlmDistribution::Poisson.canonical_link(), LinkFunction::Log);
         assert_eq!(
@@ -2799,7 +2922,7 @@ mod tests {
         );
         assert_eq!(
             AlmDistribution::Geometric.canonical_link(),
-            LinkFunction::Logit
+            LinkFunction::Log // models mean λ = (1-p)/p
         );
         assert_eq!(
             AlmDistribution::CumulativeLogistic.canonical_link(),

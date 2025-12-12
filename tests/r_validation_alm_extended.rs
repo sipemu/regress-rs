@@ -62,7 +62,6 @@ const EXPECTED_COEF_GEOMETRIC: f64 = -0.6692906099;
 const EXPECTED_LL_GEOMETRIC: f64 = -37.1473165564;
 
 #[test]
-#[ignore = "Link function parameterization differs from R greybox"]
 fn test_validate_geometric_vs_r() {
     let n = X_GEOMETRIC.len();
     let x = Mat::from_fn(n, 1, |i, _| X_GEOMETRIC[i]);
@@ -341,7 +340,6 @@ const _EXPECTED_SCALE_LOGITNORMAL: f64 = 0.5063633838;
 const EXPECTED_LL_LOGITNORMAL: f64 = 39.4585074057;
 
 #[test]
-#[ignore = "Link function parameterization differs from R greybox"]
 fn test_validate_logit_normal_vs_r() {
     let n = X_BETA.len();
     let x = Mat::from_fn(n, 1, |i, _| X_BETA[i]);
@@ -506,7 +504,6 @@ const _EXPECTED_SCALE_LOGLAPLACE: f64 = 0.2495507808;
 const EXPECTED_LL_LOGLAPLACE: f64 = -79.8950269311;
 
 #[test]
-#[ignore = "Link function parameterization differs from R greybox"]
 fn test_validate_log_laplace_vs_r() {
     let n = X_NORMAL.len();
     let x = Mat::from_fn(n, 1, |i, _| X_NORMAL[i]);
@@ -558,7 +555,6 @@ const EXPECTED_LL_LOGGENERALISEDNORMAL: f64 = -60.5531926851;
 const _LOGGENERALISEDNORMAL_SHAPE: f64 = 1.5;
 
 #[test]
-#[ignore = "Link function parameterization differs from R greybox"]
 fn test_validate_log_generalised_normal_vs_r() {
     let n = X_NORMAL.len();
     let x = Mat::from_fn(n, 1, |i, _| X_NORMAL[i]);

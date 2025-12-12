@@ -169,17 +169,23 @@ Validates maximum likelihood estimation for 21 distribution families against R's
 
 **Distributions validated** (grouped by data type):
 
-| Category | Distributions | Link Function |
-|----------|---------------|---------------|
-| Symmetric Continuous | Normal, Laplace, Logistic, StudentT | Identity |
-| Robust | AsymmetricLaplace, GeneralisedNormal, S | Identity |
-| Log-domain | LogNormal, LogLaplace, LogGeneralisedNormal | Log |
-| Positive Continuous | Gamma, InverseGaussian, Exponential | Log |
-| Unit Interval (0,1) | Beta, LogitNormal | Logit |
-| Zero-inflated | FoldedNormal, RectifiedNormal | Identity |
-| Transform | BoxCoxNormal | Identity (transformed) |
-| Count | Poisson, NegativeBinomial, Geometric | Log/Logit |
-| Cumulative | CumulativeLogistic, CumulativeNormal | Logit/Probit |
+| Category | Distributions | Link Function | Status |
+|----------|---------------|---------------|--------|
+| Symmetric Continuous | Normal, Laplace, Logistic, StudentT | Identity | ✓ All validated |
+| Robust | GeneralisedNormal | Identity | ✓ Validated |
+| Robust | AsymmetricLaplace, S | Identity | ⏳ Pending |
+| Log-domain | LogNormal, LogLaplace, LogGeneralisedNormal | Log | ✓ All validated |
+| Positive Continuous | Gamma, Exponential | Log | ✓ Validated |
+| Positive Continuous | InverseGaussian | Log | ⏳ Pending |
+| Unit Interval (0,1) | LogitNormal | Identity* | ✓ Validated |
+| Unit Interval (0,1) | Beta | Logit | ⏳ Needs dual-predictor |
+| Zero-inflated | FoldedNormal, RectifiedNormal | Identity | ⏳ IRLS differences |
+| Transform | BoxCoxNormal | Identity (transformed) | ⏳ Pending |
+| Count | Poisson, Geometric | Log | ✓ Validated |
+| Count | NegativeBinomial, Binomial | Log/Logit | ⏳ Pending |
+| Cumulative | CumulativeLogistic, CumulativeNormal | Logit/Probit | ⏳ Needs ordinal model |
+
+*LogitNormal uses Identity link on logit-scale location parameter (R greybox parameterization)
 
 **Test cases**:
 - Each distribution with n=50 observations
@@ -383,9 +389,21 @@ ALM (Augmented Linear Model) uses **IRLS with distribution-specific likelihood f
 4. **Link function handling**: Some distributions (Beta, Binomial) use non-identity links
 5. **Extra parameters**: Distributions like GeneralisedNormal and BoxCoxNormal have shape/lambda parameters
 
-**Currently validated distributions (9)**: Normal, Laplace, StudentT, Logistic, LogNormal, Poisson, Gamma, Exponential, GeneralisedNormal
+**Currently validated distributions (13)**: Normal, Laplace, StudentT, Logistic, LogNormal, Poisson, Gamma, Exponential, GeneralisedNormal, Geometric, LogitNormal, LogLaplace, LogGeneralisedNormal
 
-**Pending investigation (15)**: Geometric, FoldedNormal, RectifiedNormal, Beta, LogitNormal, S, LogLaplace, LogGeneralisedNormal, BoxCoxNormal, CumulativeLogistic, CumulativeNormal, NegativeBinomial, Binomial, InverseGaussian, AsymmetricLaplace
+**Pending investigation (11)**: FoldedNormal, RectifiedNormal, Beta, S, BoxCoxNormal, CumulativeLogistic, CumulativeNormal, NegativeBinomial, Binomial, InverseGaussian, AsymmetricLaplace
+
+**Key fixes implemented for R compatibility**:
+- **Geometric**: Changed from Logit link to Log link, modeling mean λ = (1-p)/p instead of probability p
+- **LogitNormal**: Changed from Logit link to Identity link, modeling logit-scale location parameter directly
+- **LogLaplace**: Fixed scale estimation and IRLS weights to use log-space residuals
+- **LogGeneralisedNormal**: Fixed scale estimation to use log-space residuals, corrected likelihood coefficient
+
+**Remaining investigations needed**:
+- **Beta**: Requires dual-predictor architecture (R models both α and β shape parameters)
+- **Cumulative distributions**: Require ordinal regression (proportional odds model)
+- **S distribution**: R greybox uses HAM-minimization approach with specific parameterization
+- **FoldedNormal/RectifiedNormal**: IRLS convergence differences with R implementation
 
 The pending distributions have differences in link function parameterization or model structure compared to R greybox. Tests are included but marked as `#[ignore]` for future investigation.
 
