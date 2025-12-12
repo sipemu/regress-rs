@@ -169,23 +169,30 @@ Validates maximum likelihood estimation for 21 distribution families against R's
 
 **Distributions validated** (grouped by data type):
 
-| Category | Distributions | Link Function | Status |
-|----------|---------------|---------------|--------|
-| Symmetric Continuous | Normal, Laplace, Logistic, StudentT | Identity | ✓ All validated |
-| Robust | GeneralisedNormal | Identity | ✓ Validated |
-| Robust | AsymmetricLaplace, S | Identity | ⏳ Pending |
-| Log-domain | LogNormal, LogLaplace, LogGeneralisedNormal | Log | ✓ All validated |
-| Positive Continuous | Gamma, Exponential | Log | ✓ Validated |
-| Positive Continuous | InverseGaussian | Log | ⏳ Pending |
-| Unit Interval (0,1) | LogitNormal | Identity* | ✓ Validated |
-| Unit Interval (0,1) | Beta | Logit | ⏳ Needs dual-predictor |
-| Zero-inflated | FoldedNormal, RectifiedNormal | Identity | ⏳ IRLS differences |
-| Transform | BoxCoxNormal | Identity (transformed) | ⏳ Pending |
-| Count | Poisson, Geometric | Log | ✓ Validated |
-| Count | NegativeBinomial, Binomial | Log/Logit | ⏳ Pending |
-| Cumulative | CumulativeLogistic, CumulativeNormal | Logit/Probit | ⏳ Needs ordinal model |
+| Category | Distributions | Link Function | Optimizer | Status |
+|----------|---------------|---------------|-----------|--------|
+| Symmetric Continuous | Normal, Laplace, Logistic, StudentT | Identity | IRLS | ✓ All validated |
+| Robust | GeneralisedNormal | Identity | IRLS | ✓ Validated |
+| Robust | AsymmetricLaplace | Identity | IRLS | ⏳ Pending |
+| Robust | S | Identity | L-BFGS | ⏳ Parameterization differs |
+| Log-domain | LogNormal, LogLaplace, LogGeneralisedNormal | Log | IRLS | ✓ All validated |
+| Log-domain | LogS | Log | L-BFGS | ✓ Implemented |
+| Positive Continuous | Gamma, Exponential | Log | IRLS | ✓ Validated |
+| Positive Continuous | InverseGaussian | Log | IRLS | ⏳ Pending |
+| Unit Interval (0,1) | LogitNormal | Identity* | IRLS | ✓ Validated |
+| Unit Interval (0,1) | Beta | Logit | L-BFGS | ⏳ Parameterization differs |
+| Zero-inflated | FoldedNormal | Identity | L-BFGS | ⏳ Parameterization differs |
+| Zero-inflated | RectifiedNormal | Identity | L-BFGS | ✓ Validated |
+| Transform | BoxCoxNormal | Identity (transformed) | L-BFGS | ⏳ Parameterization differs |
+| Count | Poisson, Geometric | Log | IRLS | ✓ Validated |
+| Count | NegativeBinomial, Binomial | Log/Logit | IRLS | ⏳ Pending |
+| Cumulative | CumulativeLogistic, CumulativeNormal | Logit/Probit | - | ⏳ Needs ordinal model |
 
 *LogitNormal uses Identity link on logit-scale location parameter (R greybox parameterization)
+
+**Optimizer Notes**:
+- **IRLS**: Iteratively Reweighted Least Squares - fast, reliable for standard GLM-like distributions
+- **L-BFGS**: Limited-memory BFGS optimization via argmin crate - used for distributions with complex likelihood surfaces (FoldedNormal, S, Beta, BoxCoxNormal, RectifiedNormal)
 
 **Test cases**:
 - Each distribution with n=50 observations
@@ -381,34 +388,37 @@ The tight tolerance reflects that these are deterministic calculations.
 
 #### ALM (Tolerance: 0.15 coefficients, 0.20 log-likelihood)
 
-ALM (Augmented Linear Model) uses **IRLS with distribution-specific likelihood functions**:
+ALM (Augmented Linear Model) uses a **hybrid optimization approach**:
+- **IRLS** (Iteratively Reweighted Least Squares): For standard GLM-like distributions (Normal, Laplace, Poisson, etc.)
+- **L-BFGS** (via argmin crate): For distributions with complex likelihood surfaces (FoldedNormal, RectifiedNormal, S, Beta, BoxCoxNormal)
 
 1. **Distribution diversity**: 24 distributions with varying complexity (Normal to BoxCoxNormal)
-2. **Optimizer differences**: R's `greybox::alm()` uses `nloptr` numerical optimization; this library uses IRLS
+2. **Optimizer choices**: R's `greybox::alm()` uses `nloptr` (BOBYQA); this library uses IRLS or L-BFGS depending on distribution
 3. **Scale estimation**: Different methods for estimating scale parameters (MLE vs method of moments)
 4. **Link function handling**: Some distributions use non-canonical links to match R greybox
 5. **Extra parameters**: Distributions like GeneralisedNormal and BoxCoxNormal have shape/lambda parameters
 
-**Currently validated distributions (15 total)**:
+**Currently validated distributions (16 total)**:
 - Core (9): Normal, Laplace, StudentT, Logistic, LogNormal, Poisson, Gamma, Exponential, GeneralisedNormal
-- Extended (6): Geometric, LogitNormal, LogLaplace, LogGeneralisedNormal, Exponential, GeneralisedNormal
+- Extended (7): Geometric, LogitNormal, LogLaplace, LogGeneralisedNormal, Exponential, GeneralisedNormal, RectifiedNormal
 
-**Pending investigation (11)**: FoldedNormal, RectifiedNormal, Beta, S, BoxCoxNormal, CumulativeLogistic, CumulativeNormal, NegativeBinomial, Binomial, InverseGaussian, AsymmetricLaplace
+**Pending investigation (10)**: FoldedNormal, Beta, S, BoxCoxNormal, CumulativeLogistic, CumulativeNormal, NegativeBinomial, Binomial, InverseGaussian, AsymmetricLaplace
 
 **Key fixes implemented for R compatibility**:
 - **Geometric**: Changed from Logit link to Log link, modeling mean λ = (1-p)/p instead of probability p
 - **LogitNormal**: Changed from Logit link to Identity link, modeling logit-scale location parameter directly
 - **LogLaplace**: Fixed scale estimation and IRLS weights to use log-space residuals
 - **LogGeneralisedNormal**: Fixed scale estimation to use log-space residuals, corrected likelihood coefficient
+- **RectifiedNormal**: Added L-BFGS optimization for direct likelihood maximization
 
 **Architectural differences with R greybox**:
-- **Optimization method**: R uses `nloptr` (numerical optimization); this library uses IRLS
+- **Optimization method**: R uses `nloptr` (BOBYQA algorithm); this library uses IRLS or L-BFGS
 - **Beta**: R models both α and β shape parameters with separate linear predictors
 - **Cumulative distributions**: R uses ordinal regression (proportional odds model)
 - **S distribution**: R uses HAM-minimization with specific greybox parameterization
-- **FoldedNormal/RectifiedNormal**: These distributions work better with direct likelihood optimization
+- **FoldedNormal**: Likelihood landscape may have multiple local optima; R uses global optimization
 
-The pending distributions require either numerical optimization or architectural changes to match R greybox exactly. Tests are included but marked as `#[ignore]` for future investigation.
+The pending distributions require parameter tuning or architectural changes to match R greybox exactly. Tests are included but marked as `#[ignore]` for future investigation.
 
 The relatively large tolerance (15%) allows for optimizer implementation differences while ensuring statistical equivalence.
 
@@ -437,7 +447,7 @@ Tests validate classification correctness rather than numeric precision. IC valu
 | Tweedie GLM | Iterative (IRLS) | Variance power sensitivity | 0.05-0.2 |
 | Negative Binomial | Iterative (IRLS + theta) | Joint estimation | 0.05 |
 | Diagnostics | Closed-form (matrix) | Direct computation | 1e-6 |
-| ALM | Iterative (IRLS + MLE) | Distribution diversity, scale estimation | 0.15 |
+| ALM | Hybrid (IRLS or L-BFGS) | Distribution diversity, optimizer choice | 0.15 |
 | AID | Classification | Zero proportion threshold | Classification |
 
 ### Known Differences from R

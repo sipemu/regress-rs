@@ -51,6 +51,9 @@ use crate::core::{
 };
 use crate::inference::CoefficientInference;
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
+use argmin::core::{CostFunction, Executor, Gradient, State};
+use argmin::solver::linesearch::MoreThuenteLineSearch;
+use argmin::solver::quasinewton::LBFGS;
 use faer::{Col, Mat};
 use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 use statrs::function::gamma::ln_gamma;
@@ -224,6 +227,23 @@ impl AlmDistribution {
     /// Returns whether this distribution requires data in (0, 1).
     pub fn requires_unit_interval(&self) -> bool {
         matches!(self, AlmDistribution::Beta | AlmDistribution::LogitNormal)
+    }
+
+    /// Returns whether this distribution should use numerical optimization instead of IRLS.
+    ///
+    /// Some distributions have likelihood functions that don't work well with
+    /// IRLS (e.g., mixture densities, non-standard link functions). For these,
+    /// we use L-BFGS optimization as in R greybox's nloptr backend.
+    pub fn requires_numerical_optimization(&self) -> bool {
+        matches!(
+            self,
+            AlmDistribution::FoldedNormal
+                | AlmDistribution::RectifiedNormal
+                | AlmDistribution::S
+                | AlmDistribution::LogS
+                | AlmDistribution::BoxCoxNormal
+                | AlmDistribution::Beta
+        )
     }
 }
 
@@ -620,6 +640,34 @@ fn ll_geometric(y: &Col<f64>, mu: &Col<f64>) -> f64 {
         .sum()
 }
 
+fn ll_cumulative_logistic(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    // For binary y in {0,1}, CumulativeLogistic is equivalent to logistic regression
+    // Pr(Y=1) = mu (already transformed via logit link)
+    // Log-likelihood: y*log(p) + (1-y)*log(1-p)
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let p = mu[i].clamp(1e-10, 1.0 - 1e-10);
+            let yi = y[i];
+            yi * p.ln() + (1.0 - yi) * (1.0 - p).ln()
+        })
+        .sum()
+}
+
+fn ll_cumulative_normal(y: &Col<f64>, mu: &Col<f64>) -> f64 {
+    // For binary y in {0,1}, CumulativeNormal is the probit model
+    // Pr(Y=1) = mu (already transformed via probit link)
+    // Log-likelihood: y*log(p) + (1-y)*log(1-p)
+    let n = y.nrows();
+    (0..n)
+        .map(|i| {
+            let p = mu[i].clamp(1e-10, 1.0 - 1e-10);
+            let yi = y[i];
+            yi * p.ln() + (1.0 - yi) * (1.0 - p).ln()
+        })
+        .sum()
+}
+
 /// Compute the log-likelihood for a given distribution.
 ///
 /// # Arguments
@@ -659,15 +707,147 @@ pub fn log_likelihood(
         AlmDistribution::Gamma => ll_gamma(y, mu, extra.unwrap_or(1.0)),
         AlmDistribution::InverseGaussian => ll_inverse_gaussian(y, mu, extra.unwrap_or(1.0)),
         AlmDistribution::Exponential => ll_exponential(y, mu),
-        AlmDistribution::Beta => ll_beta(y, mu, extra.unwrap_or(1.0)),
+        AlmDistribution::Beta => ll_beta(y, mu, scale), // scale is precision (φ) for Beta
         AlmDistribution::LogitNormal => ll_logit_normal(y, mu, scale),
         AlmDistribution::Poisson => ll_poisson(y, mu),
         AlmDistribution::NegativeBinomial => ll_negative_binomial(y, mu, extra.unwrap_or(1.0)),
         AlmDistribution::Binomial => ll_binomial(y, mu, extra.unwrap_or(1.0)),
         AlmDistribution::Geometric => ll_geometric(y, mu),
-        AlmDistribution::CumulativeLogistic | AlmDistribution::CumulativeNormal => {
-            f64::NEG_INFINITY
+        AlmDistribution::CumulativeLogistic => ll_cumulative_logistic(y, mu),
+        AlmDistribution::CumulativeNormal => ll_cumulative_normal(y, mu),
+    }
+}
+
+// ============================================================================
+// Numerical Optimization Cost Function for argmin
+// ============================================================================
+
+/// Negative log-likelihood cost function for numerical optimization.
+///
+/// This struct holds references to the data and distribution parameters,
+/// implementing the `CostFunction` and `Gradient` traits for argmin.
+#[derive(Clone)]
+struct NegLogLikelihoodCost<'a> {
+    x: &'a Mat<f64>,
+    y: &'a Col<f64>,
+    distribution: AlmDistribution,
+    link: LinkFunction,
+    extra_parameter: Option<f64>,
+    with_intercept: bool,
+}
+
+impl<'a> NegLogLikelihoodCost<'a> {
+    /// Compute mu from parameter vector.
+    fn compute_mu_from_params(&self, params: &[f64]) -> Col<f64> {
+        let n = self.x.nrows();
+        let p = self.x.ncols();
+
+        let mut eta = Col::zeros(n);
+
+        if self.with_intercept {
+            let intercept = params[0];
+            for i in 0..n {
+                eta[i] = intercept;
+                for j in 0..p {
+                    eta[i] += self.x[(i, j)] * params[j + 1];
+                }
+            }
+        } else {
+            for i in 0..n {
+                for (j, &param_j) in params.iter().enumerate().take(p) {
+                    eta[i] += self.x[(i, j)] * param_j;
+                }
+            }
         }
+
+        // Apply inverse link
+        let mut mu = Col::zeros(n);
+        for i in 0..n {
+            mu[i] = self.link.inverse(eta[i]);
+            // Clamp mu to valid range for the distribution
+            match self.distribution {
+                AlmDistribution::Poisson
+                | AlmDistribution::NegativeBinomial
+                | AlmDistribution::Gamma
+                | AlmDistribution::InverseGaussian
+                | AlmDistribution::Exponential
+                | AlmDistribution::FoldedNormal
+                | AlmDistribution::LogNormal
+                | AlmDistribution::LogLaplace
+                | AlmDistribution::LogS
+                | AlmDistribution::LogGeneralisedNormal => {
+                    mu[i] = mu[i].max(1e-10);
+                }
+                AlmDistribution::Beta | AlmDistribution::Binomial => {
+                    mu[i] = mu[i].clamp(1e-10, 1.0 - 1e-10);
+                }
+                AlmDistribution::Geometric => {
+                    mu[i] = mu[i].max(1e-10);
+                }
+                AlmDistribution::RectifiedNormal => {
+                    // mu can be any real value for RectifiedNormal
+                }
+                _ => {}
+            }
+        }
+
+        mu
+    }
+
+    /// Estimate scale from current mu.
+    fn estimate_scale_from_mu(&self, mu: &Col<f64>) -> f64 {
+        let n = self.y.nrows();
+        let p = if self.with_intercept {
+            self.x.ncols() + 1
+        } else {
+            self.x.ncols()
+        };
+        let df = (n - p) as f64;
+        estimate_scale(self.y, mu, self.distribution, df.max(1.0))
+    }
+}
+
+impl CostFunction for NegLogLikelihoodCost<'_> {
+    type Param = Vec<f64>;
+    type Output = f64;
+
+    fn cost(&self, params: &Self::Param) -> Result<Self::Output, argmin::core::Error> {
+        let mu = self.compute_mu_from_params(params);
+        let scale = self.estimate_scale_from_mu(&mu);
+
+        let ll = log_likelihood(self.y, &mu, self.distribution, scale, self.extra_parameter);
+
+        // Return negative log-likelihood (we minimize)
+        if ll.is_finite() {
+            Ok(-ll)
+        } else {
+            Ok(1e20) // Large penalty for invalid parameters
+        }
+    }
+}
+
+impl Gradient for NegLogLikelihoodCost<'_> {
+    type Param = Vec<f64>;
+    type Gradient = Vec<f64>;
+
+    fn gradient(&self, params: &Self::Param) -> Result<Self::Gradient, argmin::core::Error> {
+        // Numerical gradient using central differences
+        let eps = 1e-7;
+        let mut grad = vec![0.0; params.len()];
+
+        for i in 0..params.len() {
+            let mut params_plus = params.clone();
+            let mut params_minus = params.clone();
+            params_plus[i] += eps;
+            params_minus[i] -= eps;
+
+            let cost_plus = self.cost(&params_plus)?;
+            let cost_minus = self.cost(&params_minus)?;
+
+            grad[i] = (cost_plus - cost_minus) / (2.0 * eps);
+        }
+
+        Ok(grad)
     }
 }
 
@@ -676,12 +856,20 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
     let n = y.nrows();
 
     match distribution {
-        AlmDistribution::Normal
-        | AlmDistribution::FoldedNormal
-        | AlmDistribution::RectifiedNormal => {
+        AlmDistribution::Normal | AlmDistribution::RectifiedNormal => {
             // MLE for sigma: sqrt(RSS / n) or sqrt(RSS / df) for unbiased
             let rss: f64 = (0..n).map(|i| (y[i] - mu[i]).powi(2)).sum();
             (rss / df).sqrt()
+        }
+
+        AlmDistribution::FoldedNormal => {
+            // For FoldedNormal, use the second moment relationship:
+            // E[Y²] = μ² + σ², so σ² = E[Y²] - μ²
+            // Average over all observations
+            let mean_y_sq: f64 = (0..n).map(|i| y[i] * y[i]).sum::<f64>() / n as f64;
+            let mean_mu_sq: f64 = (0..n).map(|i| mu[i] * mu[i]).sum::<f64>() / n as f64;
+            let sigma_sq = (mean_y_sq - mean_mu_sq).max(0.01);
+            sigma_sq.sqrt()
         }
 
         AlmDistribution::Laplace => {
@@ -766,6 +954,31 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
             } else {
                 abs_residuals[abs_residuals.len() / 2] / 0.6745
             }
+        }
+
+        AlmDistribution::Beta => {
+            // For Beta distribution, estimate precision parameter φ using method of moments
+            // Var(Y) = μ(1-μ)/(1+φ), so φ = μ(1-μ)/Var(Y) - 1
+            // Use sample variance around fitted means
+            let var_y: f64 = (0..n)
+                .map(|i| {
+                    let resid = y[i] - mu[i];
+                    resid * resid
+                })
+                .sum::<f64>()
+                / df.max(1.0);
+
+            // Average μ(1-μ) as estimate of numerator
+            let mean_mu_var: f64 = (0..n)
+                .map(|i| {
+                    let mi = mu[i].clamp(0.01, 0.99);
+                    mi * (1.0 - mi)
+                })
+                .sum::<f64>()
+                / n as f64;
+
+            // phi = μ(1-μ)/Var(Y) - 1
+            (mean_mu_var / var_y.max(1e-10) - 1.0).max(1.0)
         }
 
         // For discrete distributions, scale is typically 1 or not used
@@ -1090,6 +1303,302 @@ impl AlmRegressor {
 
         // Compute final results
         self.build_result(x, y, &beta, &mu, scale)
+    }
+
+    /// Fit the model using L-BFGS numerical optimization.
+    ///
+    /// This method directly maximizes the log-likelihood using argmin's L-BFGS
+    /// optimizer. It's used for distributions where IRLS doesn't work well
+    /// (e.g., FoldedNormal, RectifiedNormal, S distribution, Beta).
+    fn fit_numerical(&self, x: &Mat<f64>, y: &Col<f64>) -> Result<FittedAlm, RegressionError> {
+        let n = x.nrows();
+        let p = x.ncols();
+        let n_params = if self.options.with_intercept {
+            p + 1
+        } else {
+            p
+        };
+
+        // Create cost function
+        let cost = NegLogLikelihoodCost {
+            x,
+            y,
+            distribution: self.distribution,
+            link: self.link,
+            extra_parameter: self.extra_parameter,
+            with_intercept: self.options.with_intercept,
+        };
+
+        // Try multiple starting points and pick the best
+        let mut best_params: Option<Vec<f64>> = None;
+        let mut best_cost = f64::INFINITY;
+
+        // Generate starting points
+        let starting_points = self.generate_starting_points(x, y, n_params)?;
+
+        for init_params in starting_points {
+            // Set up L-BFGS optimizer
+            let linesearch = MoreThuenteLineSearch::new();
+            let solver = LBFGS::new(linesearch, 7);
+
+            // Run optimizer (clone cost function for each run)
+            let result = Executor::new(cost.clone(), solver)
+                .configure(|state| {
+                    state
+                        .param(init_params.clone())
+                        .max_iters(self.max_iterations as u64)
+                        .target_cost(f64::NEG_INFINITY)
+                })
+                .run();
+
+            if let Ok(res) = result {
+                if let Some(params) = res.state().get_best_param() {
+                    if let Ok(cost_val) = cost.cost(params) {
+                        if cost_val < best_cost {
+                            best_cost = cost_val;
+                            best_params = Some(params.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Use best params or fall back to OLS initialization
+        let final_params = best_params.unwrap_or_else(|| {
+            let init_beta = self
+                .initialize_coefficients(x, y)
+                .unwrap_or_else(|_| Col::zeros(n_params));
+            (0..n_params).map(|i| init_beta[i]).collect()
+        });
+
+        // Convert back to Col
+        let beta = Col::from_fn(n_params, |i| final_params[i]);
+
+        // Compute final mu and scale
+        let eta = self.compute_eta(x, &beta);
+        let mu = self.compute_mu(&eta);
+        let df = (n - n_params) as f64;
+        let scale = estimate_scale(y, &mu, self.distribution, df.max(1.0));
+
+        // Build result
+        self.build_result(x, y, &beta, &mu, scale)
+    }
+
+    /// Generate multiple starting points for numerical optimization.
+    fn generate_starting_points(
+        &self,
+        x: &Mat<f64>,
+        y: &Col<f64>,
+        n_params: usize,
+    ) -> Result<Vec<Vec<f64>>, RegressionError> {
+        let mut starting_points = Vec::new();
+
+        // Starting point 1: OLS on y
+        let ols_beta = self.initialize_coefficients(x, y)?;
+        let ols_params: Vec<f64> = (0..n_params).map(|i| ols_beta[i]).collect();
+        starting_points.push(ols_params.clone());
+
+        // Starting point 2: scaled down version (for distributions where mu is small)
+        let scaled_params: Vec<f64> = ols_params.iter().map(|&x| x * 0.1).collect();
+        starting_points.push(scaled_params);
+
+        // Starting point 3: near zero (conservative start)
+        let near_zero: Vec<f64> = vec![0.01; n_params];
+        starting_points.push(near_zero);
+
+        // Distribution-specific starting points
+        match self.distribution {
+            AlmDistribution::FoldedNormal => {
+                // For FoldedNormal, the underlying mu can be small or even negative
+                // Try starting with small positive intercept and small slope
+                let n = x.nrows();
+                let p = x.ncols();
+
+                // Compute mean of y and mean of x
+                let y_mean: f64 = (0..n).map(|i| y[i]).sum::<f64>() / n as f64;
+
+                // For FoldedNormal, try intercept around sqrt(E[Y²] - σ²) which is close to |μ|
+                // Use a simple estimate: start with intercept = 0.1 * y_mean
+                let mut fn_start1 = vec![0.0; n_params];
+                if self.options.with_intercept && !fn_start1.is_empty() {
+                    fn_start1[0] = 0.1 * y_mean;
+                    // Small positive slope
+                    if p > 0 && fn_start1.len() > 1 {
+                        fn_start1[1] = 0.05;
+                    }
+                }
+                starting_points.push(fn_start1);
+
+                // Also try with larger intercept
+                let mut fn_start2 = vec![0.0; n_params];
+                if self.options.with_intercept && !fn_start2.is_empty() {
+                    fn_start2[0] = 0.5;
+                    if p > 0 && fn_start2.len() > 1 {
+                        fn_start2[1] = 0.05;
+                    }
+                }
+                starting_points.push(fn_start2);
+            }
+            AlmDistribution::RectifiedNormal => {
+                // For RectifiedNormal, try with small intercept
+                let mut small_start = ols_params.clone();
+                if self.options.with_intercept && !small_start.is_empty() {
+                    small_start[0] = 0.0;
+                }
+                starting_points.push(small_start);
+            }
+            AlmDistribution::Beta => {
+                // For Beta, try starting in middle of (0,1) range
+                let n = x.nrows();
+                let p = x.ncols();
+                let y_mean: f64 = (0..n).map(|i| y[i]).sum::<f64>() / n as f64;
+                let logit_mean = (y_mean.clamp(0.01, 0.99) / (1.0 - y_mean.clamp(0.01, 0.99))).ln();
+                let mut beta_start = vec![0.0; n_params];
+                if self.options.with_intercept && !beta_start.is_empty() {
+                    beta_start[0] = logit_mean;
+                }
+                starting_points.push(beta_start);
+
+                // Also try with larger intercept (shifted logit)
+                let mut beta_start2 = vec![0.0; n_params];
+                if self.options.with_intercept && !beta_start2.is_empty() {
+                    beta_start2[0] = 1.0; // Higher intercept
+                    if p > 0 && beta_start2.len() > 1 {
+                        beta_start2[1] = 0.5; // Some slope
+                    }
+                }
+                starting_points.push(beta_start2);
+
+                // Try starting from OLS on logit(y)
+                let y_logit: Col<f64> = Col::from_fn(n, |i| {
+                    let yi = y[i].clamp(0.01, 0.99);
+                    (yi / (1.0 - yi)).ln()
+                });
+                if let Ok(logit_beta) = self.initialize_coefficients_for_y(x, &y_logit) {
+                    let logit_params: Vec<f64> = (0..n_params).map(|i| logit_beta[i]).collect();
+                    starting_points.push(logit_params);
+                }
+            }
+            AlmDistribution::S | AlmDistribution::LogS => {
+                // For S distribution, the intercept can be negative even with positive data
+                // because the S distribution is heavy-tailed and robust to outliers
+                // Try various starting points including negative intercepts
+                let n = x.nrows();
+                let p = x.ncols();
+
+                // Starting point with negative intercept
+                let mut neg_start = ols_params.clone();
+                if self.options.with_intercept && !neg_start.is_empty() {
+                    // Try intercept = -coefficient * mean(x)
+                    if p > 0 && neg_start.len() > 1 {
+                        let x_mean: f64 = (0..n).map(|i| x[(i, 0)]).sum::<f64>() / n as f64;
+                        neg_start[0] = -neg_start[1].abs() * x_mean * 0.1;
+                    }
+                }
+                starting_points.push(neg_start);
+
+                // Also try with explicitly negative intercept
+                let mut neg_start2 = ols_params.clone();
+                if self.options.with_intercept && !neg_start2.is_empty() {
+                    neg_start2[0] = -2.0;
+                }
+                starting_points.push(neg_start2);
+            }
+            AlmDistribution::BoxCoxNormal => {
+                // For BoxCox, try starting from transformed y
+                let lambda = self.extra_parameter.unwrap_or(1.0);
+                let n = x.nrows();
+                let y_trans: Col<f64> = Col::from_fn(n, |i| {
+                    if lambda.abs() < 1e-10 {
+                        y[i].ln()
+                    } else {
+                        (y[i].powf(lambda) - 1.0) / lambda
+                    }
+                });
+                if let Ok(trans_beta) = self.initialize_coefficients_for_y(x, &y_trans) {
+                    let trans_params: Vec<f64> = (0..n_params).map(|i| trans_beta[i]).collect();
+                    starting_points.push(trans_params);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(starting_points)
+    }
+
+    /// Initialize coefficients for a specific y vector (helper for BoxCox).
+    fn initialize_coefficients_for_y(
+        &self,
+        x: &Mat<f64>,
+        y: &Col<f64>,
+    ) -> Result<Col<f64>, RegressionError> {
+        let n = x.nrows();
+        let p = x.ncols();
+
+        if self.options.with_intercept {
+            let mut x_aug = Mat::zeros(n, p + 1);
+            for i in 0..n {
+                x_aug[(i, 0)] = 1.0;
+                for j in 0..p {
+                    x_aug[(i, j + 1)] = x[(i, j)];
+                }
+            }
+
+            let qr = x_aug.col_piv_qr();
+            let perm = qr.P();
+            let perm_arr = perm.arrays().0;
+            let q = qr.compute_Q();
+            let r = qr.R();
+            let ncols = p + 1;
+
+            let qty = q.transpose() * y;
+            let mut beta_perm = Col::zeros(ncols);
+
+            for i in (0..ncols.min(n)).rev() {
+                let mut sum = qty[i];
+                for j in (i + 1)..ncols.min(n) {
+                    sum -= r[(i, j)] * beta_perm[j];
+                }
+                if r[(i, i)].abs() > 1e-10 {
+                    beta_perm[i] = sum / r[(i, i)];
+                }
+            }
+
+            let mut beta = Col::zeros(ncols);
+            for i in 0..ncols {
+                let orig_col = perm_arr[i];
+                beta[orig_col] = beta_perm[i];
+            }
+
+            Ok(beta)
+        } else {
+            let qr = x.col_piv_qr();
+            let perm = qr.P();
+            let perm_arr = perm.arrays().0;
+            let q = qr.compute_Q();
+            let r = qr.R();
+
+            let qty = q.transpose() * y;
+            let mut beta_perm = Col::zeros(p);
+
+            for i in (0..p.min(n)).rev() {
+                let mut sum = qty[i];
+                for j in (i + 1)..p.min(n) {
+                    sum -= r[(i, j)] * beta_perm[j];
+                }
+                if r[(i, i)].abs() > 1e-10 {
+                    beta_perm[i] = sum / r[(i, i)];
+                }
+            }
+
+            let mut beta = Col::zeros(p);
+            for i in 0..p {
+                let orig_col = perm_arr[i];
+                beta[orig_col] = beta_perm[i];
+            }
+
+            Ok(beta)
+        }
     }
 
     /// Initialize coefficients using OLS or appropriate method.
@@ -1781,7 +2290,12 @@ impl Regressor for AlmRegressor {
             }
         }
 
-        self.fit_irls(x, y)
+        // Choose optimizer based on distribution
+        if self.distribution.requires_numerical_optimization() {
+            self.fit_numerical(x, y)
+        } else {
+            self.fit_irls(x, y)
+        }
     }
 }
 
@@ -2596,13 +3110,14 @@ mod tests {
 
     #[test]
     fn test_ll_cumulative_distributions() {
-        let y = Col::from_fn(10, |i| i as f64);
-        let mu = Col::from_fn(10, |i| i as f64);
-        // Cumulative distributions return NEG_INFINITY (not implemented)
+        // Binary response data for cumulative distributions (logistic/probit regression)
+        let y = Col::from_fn(10, |i| if i < 5 { 0.0 } else { 1.0 });
+        let mu = Col::from_fn(10, |i| (i as f64 / 10.0).clamp(0.1, 0.9)); // Probabilities
+                                                                          // Cumulative distributions should return finite likelihoods for binary data
         let ll1 = log_likelihood(&y, &mu, AlmDistribution::CumulativeLogistic, 1.0, None);
         let ll2 = log_likelihood(&y, &mu, AlmDistribution::CumulativeNormal, 1.0, None);
-        assert!(ll1 == f64::NEG_INFINITY);
-        assert!(ll2 == f64::NEG_INFINITY);
+        assert!(ll1.is_finite());
+        assert!(ll2.is_finite());
     }
 
     // ==================== Scale estimation tests ====================
