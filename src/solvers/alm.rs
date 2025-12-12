@@ -803,7 +803,13 @@ impl<'a> NegLogLikelihoodCost<'a> {
             self.x.ncols()
         };
         let df = (n - p) as f64;
-        estimate_scale(self.y, mu, self.distribution, df.max(1.0))
+        estimate_scale(
+            self.y,
+            mu,
+            self.distribution,
+            df.max(1.0),
+            self.extra_parameter,
+        )
     }
 }
 
@@ -852,7 +858,13 @@ impl Gradient for NegLogLikelihoodCost<'_> {
 }
 
 /// Estimate the scale parameter from residuals.
-pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution, df: f64) -> f64 {
+pub fn estimate_scale(
+    y: &Col<f64>,
+    mu: &Col<f64>,
+    distribution: AlmDistribution,
+    df: f64,
+    extra: Option<f64>,
+) -> f64 {
     let n = y.nrows();
 
     match distribution {
@@ -933,9 +945,25 @@ pub fn estimate_scale(y: &Col<f64>, mu: &Col<f64>, distribution: AlmDistribution
             (ham / (2.0 * n as f64)).max(1e-10)
         }
 
-        AlmDistribution::AsymmetricLaplace
-        | AlmDistribution::GeneralisedNormal
-        | AlmDistribution::BoxCoxNormal => {
+        AlmDistribution::AsymmetricLaplace => {
+            // For asymmetric Laplace, scale is estimated from weighted absolute residuals
+            // s = (1/n) * sum(w_i * |e_i|) where w_i = alpha if e_i >= 0, else 1-alpha
+            // But the MLE scale is just mean of weighted absolute residuals
+            let alpha = extra.unwrap_or(0.5);
+            let weighted_sum: f64 = (0..n)
+                .map(|i| {
+                    let e = y[i] - mu[i];
+                    if e >= 0.0 {
+                        alpha * e.abs()
+                    } else {
+                        (1.0 - alpha) * e.abs()
+                    }
+                })
+                .sum();
+            (weighted_sum / n as f64).max(1e-10)
+        }
+
+        AlmDistribution::GeneralisedNormal | AlmDistribution::BoxCoxNormal => {
             // Use MAD-based estimate
             let mut abs_residuals: Vec<f64> = (0..n).map(|i| (y[i] - mu[i]).abs()).collect();
             abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -1252,7 +1280,8 @@ impl AlmRegressor {
 
         // Initial scale estimate
         let df = (n - n_params) as f64;
-        let mut scale = estimate_scale(y, &mu, self.distribution, df.max(1.0));
+        let mut scale =
+            estimate_scale(y, &mu, self.distribution, df.max(1.0), self.extra_parameter);
 
         // Initial loss value (using selected loss function)
         let mut prev_loss = compute_loss(
@@ -1276,7 +1305,7 @@ impl AlmRegressor {
             mu = self.compute_mu(&eta);
 
             // Update scale
-            scale = estimate_scale(y, &mu, self.distribution, df.max(1.0));
+            scale = estimate_scale(y, &mu, self.distribution, df.max(1.0), self.extra_parameter);
 
             // Check convergence using selected loss function
             let loss = compute_loss(
@@ -1378,7 +1407,7 @@ impl AlmRegressor {
         let eta = self.compute_eta(x, &beta);
         let mu = self.compute_mu(&eta);
         let df = (n - n_params) as f64;
-        let scale = estimate_scale(y, &mu, self.distribution, df.max(1.0));
+        let scale = estimate_scale(y, &mu, self.distribution, df.max(1.0), self.extra_parameter);
 
         // Build result
         self.build_result(x, y, &beta, &mu, scale)
@@ -2916,7 +2945,7 @@ mod tests {
     fn test_estimate_scale_normal() {
         let y = Col::from_fn(100, |i| i as f64);
         let mu = Col::from_fn(100, |i| i as f64 + 0.5); // Small residuals
-        let scale = estimate_scale(&y, &mu, AlmDistribution::Normal, 98.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Normal, 98.0, None);
         assert!(scale > 0.0);
         assert!(scale < 10.0); // Should be small for nearly perfect fit
     }
@@ -2925,7 +2954,7 @@ mod tests {
     fn test_estimate_scale_laplace() {
         let y = Col::from_fn(100, |i| i as f64);
         let mu = Col::from_fn(100, |i| i as f64 + 0.5);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::Laplace, 98.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Laplace, 98.0, None);
         assert!(scale > 0.0);
     }
 
@@ -2933,7 +2962,7 @@ mod tests {
     fn test_estimate_scale_gamma() {
         let y = Col::from_fn(100, |i| (i + 1) as f64);
         let mu = Col::from_fn(100, |i| (i + 1) as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::Gamma, 98.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Gamma, 98.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3126,7 +3155,7 @@ mod tests {
     fn test_estimate_scale_laplace_mad() {
         let y = Col::from_fn(100, |i| (i as f64) + 0.5);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::Laplace, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Laplace, 99.0, None);
         assert!(scale > 0.0);
         assert!((scale - 0.5).abs() < 0.1); // MAD should be ~0.5
     }
@@ -3135,7 +3164,7 @@ mod tests {
     fn test_estimate_scale_student_t() {
         let y = Col::from_fn(100, |i| (i as f64) + (i % 2) as f64 * 2.0 - 1.0);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::StudentT, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::StudentT, 99.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3143,7 +3172,7 @@ mod tests {
     fn test_estimate_scale_logistic() {
         let y = Col::from_fn(100, |i| (i as f64) + 0.5);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::Logistic, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Logistic, 99.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3151,7 +3180,7 @@ mod tests {
     fn test_estimate_scale_log_normal() {
         let y = Col::from_fn(100, |i| ((i + 1) as f64).exp());
         let mu = Col::from_fn(100, |i| ((i + 1) as f64 + 0.1).exp());
-        let scale = estimate_scale(&y, &mu, AlmDistribution::LogNormal, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::LogNormal, 99.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3159,7 +3188,7 @@ mod tests {
     fn test_estimate_scale_asymmetric_laplace() {
         let y = Col::from_fn(100, |i| (i as f64) + 0.5);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::AsymmetricLaplace, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::AsymmetricLaplace, 99.0, Some(0.5));
         assert!(scale > 0.0);
     }
 
@@ -3167,7 +3196,7 @@ mod tests {
     fn test_estimate_scale_generalised_normal() {
         let y = Col::from_fn(100, |i| (i as f64) + 0.5);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::GeneralisedNormal, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::GeneralisedNormal, 99.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3175,7 +3204,7 @@ mod tests {
     fn test_estimate_scale_s_distribution() {
         let y = Col::from_fn(100, |i| (i as f64) + 0.5);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::S, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::S, 99.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3183,7 +3212,7 @@ mod tests {
     fn test_estimate_scale_log_s() {
         let y = Col::from_fn(100, |i| ((i + 1) as f64).exp());
         let mu = Col::from_fn(100, |i| ((i + 1) as f64 + 0.1).exp());
-        let scale = estimate_scale(&y, &mu, AlmDistribution::LogS, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::LogS, 99.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3191,7 +3220,7 @@ mod tests {
     fn test_estimate_scale_box_cox() {
         let y = Col::from_fn(100, |i| (i as f64) + 0.5);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::BoxCoxNormal, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::BoxCoxNormal, 99.0, None);
         assert!(scale > 0.0);
     }
 
@@ -3199,7 +3228,7 @@ mod tests {
     fn test_estimate_scale_discrete_is_one() {
         let y = Col::from_fn(100, |i| i as f64);
         let mu = Col::from_fn(100, |i| i as f64);
-        let scale = estimate_scale(&y, &mu, AlmDistribution::Poisson, 99.0);
+        let scale = estimate_scale(&y, &mu, AlmDistribution::Poisson, 99.0, None);
         assert!((scale - 1.0).abs() < 1e-10);
     }
 

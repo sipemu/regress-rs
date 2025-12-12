@@ -40,6 +40,15 @@ const X_NORMAL: [f64; 50] = [
     41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0,
 ];
 
+#[rustfmt::skip]
+const X_POISSON: [f64; 50] = [
+    0.000000, 0.040816, 0.081633, 0.122449, 0.163265, 0.204082, 0.244898, 0.285714, 0.326531, 0.367347,
+    0.408163, 0.448980, 0.489796, 0.530612, 0.571429, 0.612245, 0.653061, 0.693878, 0.734694, 0.775510,
+    0.816327, 0.857143, 0.897959, 0.938776, 0.979592, 1.020408, 1.061224, 1.102041, 1.142857, 1.183673,
+    1.224490, 1.265306, 1.306122, 1.346939, 1.387755, 1.428571, 1.469388, 1.510204, 1.551020, 1.591837,
+    1.632653, 1.673469, 1.714286, 1.755102, 1.795918, 1.836735, 1.877551, 1.918367, 1.959184, 2.000000,
+];
+
 // =============================================================================
 // GROUP 1: COUNT DISTRIBUTIONS
 // =============================================================================
@@ -753,6 +762,216 @@ fn test_validate_cumulative_normal_vs_r() {
     assert!(
         coef > 0.3 && coef < 0.9,
         "CumulativeNormal coef: {} should be positive and roughly 0.55",
+        coef
+    );
+}
+
+// =============================================================================
+// GROUP 7: REMAINING DISTRIBUTIONS (NegativeBinomial, Binomial, InverseGaussian, AsymmetricLaplace)
+// =============================================================================
+
+/// R code:
+/// ```r
+/// x5 <- seq(0, 2, length.out = 50)
+/// mu_nb <- exp(0.5 + 0.8 * x5)
+/// y6 <- rnbinom(n, size = 2, mu = mu_nb)
+/// model_nbinom <- alm(y6 ~ x5, distribution = "dnbinom")
+/// ```
+#[rustfmt::skip]
+const Y_NEGBINOM: [f64; 50] = [3.0, 1.0, 0.0, 2.0, 1.0, 0.0, 1.0, 1.0, 0.0, 3.0, 0.0, 2.0, 1.0, 3.0, 3.0, 0.0, 2.0, 4.0, 8.0, 1.0, 1.0, 8.0, 1.0, 5.0, 4.0, 0.0, 3.0, 4.0, 3.0, 5.0, 0.0, 9.0, 10.0, 5.0, 4.0, 4.0, 10.0, 6.0, 1.0, 5.0, 3.0, 8.0, 9.0, 10.0, 14.0, 6.0, 4.0, 2.0, 6.0, 3.0];
+
+const EXPECTED_INTERCEPT_NEGBINOM: f64 = 0.2337556734;
+const EXPECTED_COEF_NEGBINOM: f64 = 0.9548295692;
+const EXPECTED_LL_NEGBINOM: f64 = -110.4175907404;
+
+#[test]
+fn test_validate_negative_binomial_vs_r() {
+    let n = X_POISSON.len();
+    let x = Mat::from_fn(n, 1, |i, _| X_POISSON[i]);
+    let y = Col::from_fn(n, |i| Y_NEGBINOM[i]);
+
+    let alm = AlmRegressor::builder()
+        .distribution(AlmDistribution::NegativeBinomial)
+        .extra_parameter(2.0) // size = 2 as in R
+        .with_intercept(true)
+        .build();
+
+    let fitted = alm.fit(&x, &y).expect("fit should succeed");
+
+    let intercept = fitted.result().intercept.unwrap();
+    let coef = fitted.result().coefficients[0];
+    let ll = fitted.result().log_likelihood;
+
+    println!(
+        "NegativeBinomial: intercept={}, coef={}, ll={}",
+        intercept, coef, ll
+    );
+    println!(
+        "Expected: intercept={}, coef={}, ll={}",
+        EXPECTED_INTERCEPT_NEGBINOM, EXPECTED_COEF_NEGBINOM, EXPECTED_LL_NEGBINOM
+    );
+
+    assert!(
+        ll.is_finite(),
+        "NegativeBinomial LL should be finite: {}",
+        ll
+    );
+    assert!(
+        coef > 0.5 && coef < 1.5,
+        "NegativeBinomial coef: {} should be positive and roughly 0.95",
+        coef
+    );
+}
+
+/// R code:
+/// ```r
+/// x_binom <- seq(0.1, 2.0, length.out = n)
+/// p_true <- 1 / (1 + exp(-(0.5 + 0.8 * x_binom)))
+/// y_binom <- rbinom(n, size = 10, prob = p_true)
+/// model_binom <- alm(y_binom ~ x_binom, distribution = "dbinom", size = 10)
+/// ```
+#[rustfmt::skip]
+const X_BINOMIAL: [f64; 50] = [0.100000, 0.138776, 0.177551, 0.216327, 0.255102, 0.293878, 0.332653, 0.371429, 0.410204, 0.448980, 0.487755, 0.526531, 0.565306, 0.604082, 0.642857, 0.681633, 0.720408, 0.759184, 0.797959, 0.836735, 0.875510, 0.914286, 0.953061, 0.991837, 1.030612, 1.069388, 1.108163, 1.146939, 1.185714, 1.224490, 1.263265, 1.302041, 1.340816, 1.379592, 1.418367, 1.457143, 1.495918, 1.534694, 1.573469, 1.612245, 1.651020, 1.689796, 1.728571, 1.767347, 1.806122, 1.844898, 1.883673, 1.922449, 1.961224, 2.000000];
+
+#[rustfmt::skip]
+const Y_BINOMIAL: [f64; 50] = [4.0, 4.0, 7.0, 5.0, 6.0, 7.0, 6.0, 8.0, 6.0, 6.0, 7.0, 6.0, 5.0, 8.0, 8.0, 5.0, 5.0, 9.0, 8.0, 8.0, 6.0, 9.0, 5.0, 6.0, 10.0, 8.0, 8.0, 6.0, 8.0, 7.0, 7.0, 7.0, 9.0, 8.0, 10.0, 7.0, 10.0, 9.0, 7.0, 8.0, 9.0, 9.0, 10.0, 6.0, 9.0, 7.0, 8.0, 9.0, 7.0, 9.0];
+
+// Expected from R GLM (greybox has issues with binomial)
+const EXPECTED_INTERCEPT_BINOMIAL: f64 = 0.1640406390;
+const EXPECTED_COEF_BINOMIAL: f64 = 0.8500354454;
+const EXPECTED_LL_BINOMIAL: f64 = -83.1693434671;
+
+#[test]
+fn test_validate_binomial_vs_r() {
+    let n = X_BINOMIAL.len();
+    let x = Mat::from_fn(n, 1, |i, _| X_BINOMIAL[i]);
+    // Binomial expects proportions (0-1), not raw counts, so divide by n_trials
+    let y = Col::from_fn(n, |i| Y_BINOMIAL[i] / 10.0);
+
+    let alm = AlmRegressor::builder()
+        .distribution(AlmDistribution::Binomial)
+        .extra_parameter(10.0) // size = 10 as in R
+        .with_intercept(true)
+        .build();
+
+    let fitted = alm.fit(&x, &y).expect("fit should succeed");
+
+    let intercept = fitted.result().intercept.unwrap();
+    let coef = fitted.result().coefficients[0];
+    let ll = fitted.result().log_likelihood;
+
+    println!(
+        "Binomial: intercept={}, coef={}, ll={}",
+        intercept, coef, ll
+    );
+    println!(
+        "Expected: intercept={}, coef={}, ll={}",
+        EXPECTED_INTERCEPT_BINOMIAL, EXPECTED_COEF_BINOMIAL, EXPECTED_LL_BINOMIAL
+    );
+
+    assert!(ll.is_finite(), "Binomial LL should be finite: {}", ll);
+    assert!(coef > 0.0, "Binomial coef: {} should be positive", coef);
+}
+
+/// R code:
+/// ```r
+/// mu_ig <- exp(0.5 + 0.03 * x1)
+/// y8 <- statmod::rinvgauss(n, mean = mu_ig, shape = 2)
+/// model_ig <- alm(y8 ~ x1, distribution = "dinvgauss")
+/// ```
+#[rustfmt::skip]
+const Y_INVGAUSS: [f64; 50] = [0.774912, 0.819823, 2.051204, 2.238079, 0.811187, 1.444187, 6.126613, 0.380825, 0.942102, 4.666185, 0.718473, 0.701441, 0.644813, 0.803015, 8.358518, 0.526914, 0.273211, 0.551984, 2.587670, 23.856996, 1.522337, 1.098279, 2.666753, 9.856788, 1.038836, 8.064831, 1.834080, 0.491582, 1.986239, 2.574904, 0.538578, 24.278775, 1.184830, 1.044460, 5.590363, 2.847270, 0.767624, 2.765491, 8.847163, 20.269859, 1.215320, 0.342127, 22.494909, 2.672745, 1.408883, 7.438163, 18.192966, 0.931107, 0.626240, 19.053405];
+
+const EXPECTED_INTERCEPT_INVGAUSS: f64 = 0.9469271494;
+const EXPECTED_COEF_INVGAUSS: f64 = 0.0186493504;
+const EXPECTED_LL_INVGAUSS: f64 = -112.4194265172;
+
+#[test]
+fn test_validate_inverse_gaussian_vs_r() {
+    let n = X_NORMAL.len();
+    let x = Mat::from_fn(n, 1, |i, _| X_NORMAL[i]);
+    let y = Col::from_fn(n, |i| Y_INVGAUSS[i]);
+
+    let alm = AlmRegressor::builder()
+        .distribution(AlmDistribution::InverseGaussian)
+        .with_intercept(true)
+        .build();
+
+    let fitted = alm.fit(&x, &y).expect("fit should succeed");
+
+    let intercept = fitted.result().intercept.unwrap();
+    let coef = fitted.result().coefficients[0];
+    let ll = fitted.result().log_likelihood;
+
+    println!(
+        "InverseGaussian: intercept={}, coef={}, ll={}",
+        intercept, coef, ll
+    );
+    println!(
+        "Expected: intercept={}, coef={}, ll={}",
+        EXPECTED_INTERCEPT_INVGAUSS, EXPECTED_COEF_INVGAUSS, EXPECTED_LL_INVGAUSS
+    );
+
+    assert!(
+        ll.is_finite(),
+        "InverseGaussian LL should be finite: {}",
+        ll
+    );
+    assert!(
+        coef > 0.0,
+        "InverseGaussian coef: {} should be positive",
+        coef
+    );
+}
+
+/// R code:
+/// ```r
+/// y9 <- 2.5 + 1.5 * x1 + rnorm(n, sd = 3)
+/// model_alaplace <- alm(y9 ~ x1, distribution = "dalaplace", alpha = 0.75)
+/// ```
+#[rustfmt::skip]
+const Y_ALAPLACE: [f64; 50] = [6.451432, 9.478733, 10.891394, 7.332199, 12.422690, 13.803622, 12.684414, 16.429011, 8.410654, 18.230357, 14.211325, 20.727498, 26.770104, 25.082414, 22.900107, 25.170072, 24.300464, 22.410523, 33.575010, 37.022978, 34.082555, 32.524625, 36.498098, 38.108032, 37.913433, 40.449693, 42.432948, 45.963289, 49.340003, 40.824776, 54.792999, 58.157549, 48.520165, 51.374260, 57.378138, 56.267251, 61.885620, 60.996032, 57.065849, 63.828187, 60.369599, 65.098897, 66.487781, 65.780882, 74.162848, 71.522983, 74.296959, 80.709180, 75.102485, 77.860979];
+
+const EXPECTED_INTERCEPT_ALAPLACE: f64 = 5.0374865695;
+const EXPECTED_COEF_ALAPLACE: f64 = 1.4831836223;
+const EXPECTED_SCALE_ALAPLACE: f64 = 1.0340629331;
+const EXPECTED_LL_ALAPLACE: f64 = -135.3736035780;
+
+#[test]
+fn test_validate_asymmetric_laplace_vs_r() {
+    let n = X_NORMAL.len();
+    let x = Mat::from_fn(n, 1, |i, _| X_NORMAL[i]);
+    let y = Col::from_fn(n, |i| Y_ALAPLACE[i]);
+
+    let alm = AlmRegressor::builder()
+        .distribution(AlmDistribution::AsymmetricLaplace)
+        .extra_parameter(0.75) // alpha = 0.75 for 75th percentile quantile regression
+        .with_intercept(true)
+        .build();
+
+    let fitted = alm.fit(&x, &y).expect("fit should succeed");
+
+    let intercept = fitted.result().intercept.unwrap();
+    let coef = fitted.result().coefficients[0];
+    let ll = fitted.result().log_likelihood;
+
+    println!(
+        "AsymmetricLaplace: intercept={}, coef={}, ll={}",
+        intercept, coef, ll
+    );
+    println!(
+        "Expected: intercept={}, coef={}, ll={}",
+        EXPECTED_INTERCEPT_ALAPLACE, EXPECTED_COEF_ALAPLACE, EXPECTED_LL_ALAPLACE
+    );
+
+    assert!(
+        ll.is_finite(),
+        "AsymmetricLaplace LL should be finite: {}",
+        ll
+    );
+    assert!(
+        coef > 1.0 && coef < 2.0,
+        "AsymmetricLaplace coef: {} should be around 1.48",
         coef
     );
 }

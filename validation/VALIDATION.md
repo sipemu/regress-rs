@@ -173,19 +173,20 @@ Validates maximum likelihood estimation for 21 distribution families against R's
 |----------|---------------|---------------|-----------|--------|
 | Symmetric Continuous | Normal, Laplace, Logistic, StudentT | Identity | IRLS | ✓ All validated |
 | Robust | GeneralisedNormal | Identity | IRLS | ✓ Validated |
-| Robust | AsymmetricLaplace | Identity | IRLS | ⏳ Pending |
+| Robust | AsymmetricLaplace | Identity | IRLS | ✓ Validated |
 | Robust | S | Identity | L-BFGS | ✓ Validated (better LL than R) |
 | Log-domain | LogNormal, LogLaplace, LogGeneralisedNormal | Log | IRLS | ✓ All validated |
 | Log-domain | LogS | Log | L-BFGS | ✓ Implemented |
 | Positive Continuous | Gamma, Exponential | Log | IRLS | ✓ Validated |
-| Positive Continuous | InverseGaussian | Log | IRLS | ⏳ Pending |
+| Positive Continuous | InverseGaussian | Log | IRLS | ✓ Validated |
 | Unit Interval (0,1) | LogitNormal | Identity* | IRLS | ✓ Validated |
 | Unit Interval (0,1) | Beta | Logit | L-BFGS | ✓ Validated |
 | Zero-inflated | FoldedNormal | Identity | L-BFGS | ✓ Validated (better LL than R) |
 | Zero-inflated | RectifiedNormal | Identity | L-BFGS | ✓ Validated |
 | Transform | BoxCoxNormal | Identity (transformed) | L-BFGS | ✓ Validated |
 | Count | Poisson, Geometric | Log | IRLS | ✓ Validated |
-| Count | NegativeBinomial, Binomial | Log/Logit | IRLS | ⏳ Pending |
+| Count | NegativeBinomial | Log | IRLS | ✓ Validated |
+| Count | Binomial | Logit | IRLS | ✓ Validated |
 | Cumulative | CumulativeLogistic, CumulativeNormal | Logit/Probit | L-BFGS | ✓ Validated |
 
 *LogitNormal uses Identity link on logit-scale location parameter (R greybox parameterization)
