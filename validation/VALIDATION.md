@@ -384,12 +384,14 @@ The tight tolerance reflects that these are deterministic calculations.
 ALM (Augmented Linear Model) uses **IRLS with distribution-specific likelihood functions**:
 
 1. **Distribution diversity**: 24 distributions with varying complexity (Normal to BoxCoxNormal)
-2. **Optimizer differences**: R's `greybox` uses specific optimization strategies that may differ
+2. **Optimizer differences**: R's `greybox::alm()` uses `nloptr` numerical optimization; this library uses IRLS
 3. **Scale estimation**: Different methods for estimating scale parameters (MLE vs method of moments)
-4. **Link function handling**: Some distributions (Beta, Binomial) use non-identity links
+4. **Link function handling**: Some distributions use non-canonical links to match R greybox
 5. **Extra parameters**: Distributions like GeneralisedNormal and BoxCoxNormal have shape/lambda parameters
 
-**Currently validated distributions (13)**: Normal, Laplace, StudentT, Logistic, LogNormal, Poisson, Gamma, Exponential, GeneralisedNormal, Geometric, LogitNormal, LogLaplace, LogGeneralisedNormal
+**Currently validated distributions (15 total)**:
+- Core (9): Normal, Laplace, StudentT, Logistic, LogNormal, Poisson, Gamma, Exponential, GeneralisedNormal
+- Extended (6): Geometric, LogitNormal, LogLaplace, LogGeneralisedNormal, Exponential, GeneralisedNormal
 
 **Pending investigation (11)**: FoldedNormal, RectifiedNormal, Beta, S, BoxCoxNormal, CumulativeLogistic, CumulativeNormal, NegativeBinomial, Binomial, InverseGaussian, AsymmetricLaplace
 
@@ -399,13 +401,14 @@ ALM (Augmented Linear Model) uses **IRLS with distribution-specific likelihood f
 - **LogLaplace**: Fixed scale estimation and IRLS weights to use log-space residuals
 - **LogGeneralisedNormal**: Fixed scale estimation to use log-space residuals, corrected likelihood coefficient
 
-**Remaining investigations needed**:
-- **Beta**: Requires dual-predictor architecture (R models both α and β shape parameters)
-- **Cumulative distributions**: Require ordinal regression (proportional odds model)
-- **S distribution**: R greybox uses HAM-minimization approach with specific parameterization
-- **FoldedNormal/RectifiedNormal**: IRLS convergence differences with R implementation
+**Architectural differences with R greybox**:
+- **Optimization method**: R uses `nloptr` (numerical optimization); this library uses IRLS
+- **Beta**: R models both α and β shape parameters with separate linear predictors
+- **Cumulative distributions**: R uses ordinal regression (proportional odds model)
+- **S distribution**: R uses HAM-minimization with specific greybox parameterization
+- **FoldedNormal/RectifiedNormal**: These distributions work better with direct likelihood optimization
 
-The pending distributions have differences in link function parameterization or model structure compared to R greybox. Tests are included but marked as `#[ignore]` for future investigation.
+The pending distributions require either numerical optimization or architectural changes to match R greybox exactly. Tests are included but marked as `#[ignore]` for future investigation.
 
 The relatively large tolerance (15%) allows for optimizer implementation differences while ensuring statistical equivalence.
 
