@@ -14,7 +14,7 @@
 //!
 //! - de Jong, S. (1993). SIMPLS: an alternative approach to partial least squares regression.
 //!   Chemometrics and Intelligent Laboratory Systems, 18, 251-263.
-//! - Validated against R's `pls` package: https://cran.r-project.org/package=pls
+//! - Validated against R's `pls` package: <https://cran.r-project.org/package=pls>
 
 use crate::core::{IntervalType, PredictionResult, RegressionResult};
 use crate::solvers::traits::{FittedRegressor, RegressionError, Regressor};
@@ -75,6 +75,7 @@ impl PlsRegressor {
     /// Compute the SIMPLS algorithm.
     ///
     /// Returns (weights W, x_loadings P, y_loadings Q, scores T, coefficients B).
+    #[allow(clippy::type_complexity)]
     fn simpls(
         &self,
         x: &Mat<f64>,
@@ -346,10 +347,7 @@ impl Regressor for PlsRegressor {
         let n_components = self.n_components.min(max_components);
 
         if n_components == 0 {
-            return Err(RegressionError::InsufficientObservations {
-                needed: 1,
-                got: 0,
-            });
+            return Err(RegressionError::InsufficientObservations { needed: 1, got: 0 });
         }
 
         // Center data (and optionally scale X)
@@ -836,13 +834,17 @@ mod tests {
     #[test]
     fn test_simple_fit() {
         // Simple linear relationship: y = 2*x1 + 3*x2 + 1
-        let x = Mat::from_fn(20, 2, |i, j| {
-            if j == 0 {
-                i as f64
-            } else {
-                (i as f64) * 0.5
-            }
-        });
+        let x = Mat::from_fn(
+            20,
+            2,
+            |i, j| {
+                if j == 0 {
+                    i as f64
+                } else {
+                    (i as f64) * 0.5
+                }
+            },
+        );
         let y = Col::from_fn(20, |i| 1.0 + 2.0 * (i as f64) + 3.0 * (i as f64) * 0.5);
 
         let model = PlsRegressor::builder().n_components(2).build();
@@ -854,13 +856,17 @@ mod tests {
 
     #[test]
     fn test_predict() {
-        let x = Mat::from_fn(20, 2, |i, j| {
-            if j == 0 {
-                i as f64
-            } else {
-                (i as f64) * 0.5
-            }
-        });
+        let x = Mat::from_fn(
+            20,
+            2,
+            |i, j| {
+                if j == 0 {
+                    i as f64
+                } else {
+                    (i as f64) * 0.5
+                }
+            },
+        );
         let y = Col::from_fn(20, |i| 1.0 + 2.0 * (i as f64) + 3.0 * (i as f64) * 0.5);
 
         let model = PlsRegressor::builder().n_components(2).build();
@@ -918,25 +924,19 @@ mod tests {
     fn test_with_scaling() {
         // Create data with features on very different scales
         let x = Mat::from_fn(30, 3, |i, j| match j {
-            0 => i as f64,               // scale ~30
-            1 => (i as f64) * 1000.0,    // scale ~30000
-            2 => (i as f64) * 0.001,     // scale ~0.03
+            0 => i as f64,            // scale ~30
+            1 => (i as f64) * 1000.0, // scale ~30000
+            2 => (i as f64) * 0.001,  // scale ~0.03
             _ => 0.0,
         });
         let y = Col::from_fn(30, |i| (i as f64) * 2.5 + 10.0);
 
         // Without scaling
-        let model_no_scale = PlsRegressor::builder()
-            .n_components(2)
-            .scale(false)
-            .build();
+        let model_no_scale = PlsRegressor::builder().n_components(2).scale(false).build();
         let fitted_no_scale = model_no_scale.fit(&x, &y).expect("model should fit");
 
         // With scaling
-        let model_scaled = PlsRegressor::builder()
-            .n_components(2)
-            .scale(true)
-            .build();
+        let model_scaled = PlsRegressor::builder().n_components(2).scale(true).build();
         let fitted_scaled = model_scaled.fit(&x, &y).expect("model should fit");
 
         // Both should fit, but potentially different R²
@@ -968,13 +968,17 @@ mod tests {
 
     #[test]
     fn test_without_intercept() {
-        let x = Mat::from_fn(20, 2, |i, j| {
-            if j == 0 {
-                i as f64
-            } else {
-                (i as f64) * 0.5
-            }
-        });
+        let x = Mat::from_fn(
+            20,
+            2,
+            |i, j| {
+                if j == 0 {
+                    i as f64
+                } else {
+                    (i as f64) * 0.5
+                }
+            },
+        );
         let y = Col::from_fn(20, |i| 2.0 * (i as f64) + 1.5 * (i as f64) * 0.5);
 
         let model = PlsRegressor::builder()
